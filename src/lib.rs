@@ -1,18 +1,30 @@
 /*!
 This crate provides the generic type [`Prison<T>`], a data structure that uses an underlying `Vec<T>`
 to store values of the same type, but allows simultaneous interior mutability to each and every
-value by providing .visit() methods that take closures that are passed mutable references to the values.
+value by providing `.visit()` methods that take closures that are passed mutable references to the values.
 
 This documentation describes the usage of [`Prison<T>`], how its `Vec` analogous methods differ from
-those found on a `Vec`, and how it achieves memory safety.
+those found on a `Vec`, how to use its unusual `.visit()` methods, and how it achieves memory safety.
 
-# DOCUMENTATION IN PROGRESS!
+# Usage
 
+This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
+
+First, add this crate as a dependency to your project:
+```toml
+[dependencies]
+grit-data-prison = "0.1.0"
+```
+Then import [`AccessError`] from the crate root, along with the relevant version you wish to use in
+the file where it is needed (right now only one flavor is available, [`single_threaded`]):
+```rust
+use grit_data_prison::{AccessError, single_threaded::Prison};
+```
 
 */
 
-// #![deny(rustdoc::broken_intra_doc_links)]
-// #![deny(rustdoc::private_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(rustdoc::private_intra_doc_links)]
 // #![deny(missing_docs)]
 
 #[cfg(not(feature = "no_std"))]
@@ -28,13 +40,47 @@ trait Error: Debug + Display {
     }
 }
 
+/// Module defining the version(s) of [`Prison<T>`] suitable for use only from within a single-thread
 pub mod single_threaded;
 
+/// Error type that provides helpful information about why an operation on any [`Prison<T>`] failed
+/// 
+/// Every error returned from functions or methods defined in this crate will be one of these variants,
+/// and nearly all versions of [`Prison<T>`] are designed to never panic and always return errors.
+/// 
+/// Additional variants may be added in the future, therefore it is recommended you add a catch-all branch
+/// to any match statements on this enum to future-proof your code:
+/// ```rust
+/// # use grit_data_prison::AccessError;
+/// # fn main() {
+/// # let acc_err = AccessError::IndexOutOfRange(100);
+/// match acc_err {
+///     AccessError::IndexOutOfRange(bad_idx) => {},
+///     AccessError::CellAlreadyBeingVisited(double_idx) => {},
+///     // other variants
+///     _ => {}
+/// }
+/// # }
+/// ```
+/// 
+/// [`AccessError`] has a custom implementation for both [`std::fmt::Display`] and 
+/// [`std::fmt::Debug`] traits, with the `Display` version giving a short description of the problem,
+/// and the `Debug` version giving a more in-depth explaination of exactly why an error had to be
+/// returned
 pub enum AccessError {
+    /// Indicates that an operation attempted to access an index beyond the range of the [`Prison<T>`],
+    /// along with the offending index
     IndexOutOfRange(usize),
+    /// Indicates that an operation attempted to access an index already being accessed by another operation,
+    /// along with the index in question
     CellAlreadyBeingVisited(usize),
+    /// Indicates that a push would require re-allocation of the internal `Vec<T>`, thereby invalidating
+    /// any current visits
     PushAtMaxCapacityWhileVisiting,
+    /// Indicates that the last element in the [`Prison<T>`] is being accessed, and `pop()`-ing the value out
+    /// of the underlying `Vec<T>` would invalidate the reference
     PopWhileLastElementIsVisited(usize),
+    /// Indicates that the underlying `Vec<T>` is empty, and there is nothing to `pop()` out
     PopOnEmptyPrison
 }
 
