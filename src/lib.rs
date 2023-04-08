@@ -1,31 +1,31 @@
-/*!
-This crate provides the generic type [`Prison<T>`], a data structure that uses an underlying `Vec<T>`
-to store values of the same type, but allows simultaneous interior mutability to each and every
-value by providing `.visit()` methods that take closures that are passed mutable references to the values.
 
-This documentation describes the usage of [`Prison<T>`], how its `Vec` analogous methods differ from
-those found on a `Vec`, how to use its unusual `.visit()` methods, and how it achieves memory safety.
-
-# Usage
-
-This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
-
-First, add this crate as a dependency to your project:
-```toml
-[dependencies]
-grit-data-prison = "0.1.0"
-```
-Then import [`AccessError`] from the crate root, along with the relevant version you wish to use in
-the file where it is needed (right now only one flavor is available, [`single_threaded`]):
-```rust
-use grit_data_prison::{AccessError, single_threaded::Prison};
-```
-
-*/
+//! This crate provides the generic type [`Prison<T>`], a data structure that uses an underlying `Vec<T>`
+//! to store values of the same type, but allows simultaneous interior mutability to each and every
+//! value by providing `.visit()` methods that take closures that are passed mutable references to the values.
+//! 
+//! This documentation describes the usage of [`Prison<T>`], how its `Vec` analogous methods differ from
+//! those found on a `Vec`, how to use its unusual `.visit()` methods, and how it achieves memory safety.
+//! 
+//! # Usage
+//! 
+//! This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
+//! 
+//! First, add this crate as a dependency to your project:
+//! ```toml
+//! [dependencies]
+//! grit-data-prison = "0.1.0"
+//! ```
+//! Then import [`AccessError`] from the crate root, along with the relevant version you wish to use in
+//! the file where it is needed (right now only one flavor is available, [`single_threaded`]):
+//! ```rust
+//! use grit_data_prison::{AccessError, single_threaded::Prison};
+//! ```
+//! 
+//!
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(rustdoc::private_intra_doc_links)]
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 
 #[cfg(not(feature = "no_std"))]
 use std::{cell::UnsafeCell, ops::RangeBounds, error::Error, fmt::{Display, Debug}};
