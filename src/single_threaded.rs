@@ -1,10 +1,24 @@
 #[cfg(not(feature = "no_std"))]
-use std::ops::RangeBounds;
+use std::{ops::RangeBounds, cell::UnsafeCell};
 
 #[cfg(feature = "no_std")]
-use core::ops::RangeBounds;
+use core::{ops::RangeBounds, cell::UnsafeCell};
 
-use crate::{AccessError, LockValPair, CountVecPair, extract_true_start_end};
+use crate::{AccessError, extract_true_start_end};
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct PrisonInternal<T> {
+    visit_count: usize,
+    vec: Vec<PrisonCellInternal<T>>
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct PrisonCellInternal<T> {
+    locked: bool,
+    val: T,
+}
 
 /// The single-threaded implementation of [`Prison<T>`]
 /// 
@@ -16,7 +30,7 @@ use crate::{AccessError, LockValPair, CountVecPair, extract_true_start_end};
 /// See the crate-level documentation for more info
 #[derive(Debug)]
 pub struct Prison<T> {
-    count_vec: CountVecPair<T>,
+    internal: UnsafeCell<PrisonInternal<T>>,
 }
 
 impl<T> Prison<T> {
@@ -34,8 +48,11 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn new() -> Self {
-        return Self { count_vec: CountVecPair::new() };
+        return Self { 
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, vec: Vec::new() })
+        };
     }
+
     /// Create a new [`Prison<T>`] with the a specific starting capacity (`Vec::with_capacity()`)
     /// 
     /// Because re-allocating the internal `Vec` comes with many restrictions,
@@ -50,24 +67,36 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn with_capacity(size: usize) -> Self {
-        return Self { count_vec: CountVecPair::with_capacity(size) };
+        return Self { 
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, vec: Vec::with_capacity(size) })
+        };
     }
+
+    #[inline(always)]
+    fn internal(&self) -> &mut PrisonInternal<T> {
+        return unsafe { &mut *self.internal.get() };
+    }
+
     /// Return the length of the underlying `Vec`
     /// 
     /// Length refers to the number of *filled* indexes in an Vec,
     /// not necessarily the number of reserved spaces in memory allocated to it.
     pub fn len(&self) -> usize {
-        let (_, vec) = self.count_vec.open();
-        return vec.len();
+        let internal = self.internal();
+        return internal.vec.len();
     }
+
     /// Return the capacity of the underlying `Vec`
     /// 
     /// Capacity refers to the number of total spaces in memory reserved for the Vec
     /// to *possibly* use, not the number it currently *has* used
     pub fn cap(&self) -> usize {
-        let (_, vec) = self.count_vec.open();
-        return vec.capacity();
+        let internal = self.internal();
+        return internal.vec.capacity();
     }
+
+    
+
     /// Add a value onto the end of the underlying `Vec` and return the index it was
     /// added at.
     /// 
@@ -104,14 +133,15 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn push(&self, value: T) -> Result<usize, AccessError> {
-        let (visit_count, vec) = self.count_vec.open();
-        let new_idx = vec.len();
-        if new_idx >= vec.capacity() && *visit_count > 0 {
+        let internal = self.internal();
+        let new_idx = internal.vec.len();
+        if new_idx >= internal.vec.capacity() && internal.visit_count > 0 {
             return Err(AccessError::PushAtMaxCapacityWhileVisiting);
         }
-        vec.push(LockValPair::new(value));
+        internal.vec.push(PrisonCellInternal { locked: false, val: value });
         return Ok(new_idx);
     }
+
     /// Remove the last element from the underlying `Vec` and return the value
     /// 
     /// As long as the last element isn't being visited, you can `pop()` the last
@@ -135,7 +165,7 @@ impl<T> Prison<T> {
     /// 
     /// However, if the last element *is* being visited, `.pop()` will return an
     /// [`AccessError::PopWhileLastElementIsVisited(usize)`] error.
-    /// /// ### Example
+    /// ### Example
     /// ```rust
     /// # use grit_data_prison::single_threaded::Prison;
     /// # fn main() {
@@ -147,16 +177,18 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn pop(&self) -> Result<T, AccessError> {
-        let (_, vec) = self.count_vec.open();
-        if vec.len() == 0 {
+        let internal = self.internal();
+        if internal.vec.len() == 0 {
             return Err(AccessError::PopOnEmptyPrison)
         }
-        let (last_locked, _) = vec[vec.len()-1].open();
-        if *last_locked {
-            return Err(AccessError::PopWhileLastElementIsVisited(vec.len()-1));
+        let last_idx = internal.vec.len()-1;
+        let last_locked = internal.vec[last_idx].locked;
+        if last_locked {
+            return Err(AccessError::PopWhileLastElementIsVisited(last_idx));
         }
-        return Ok(vec.pop().unwrap().0.into_inner().1);
+        return Ok(internal.vec.pop().unwrap().val);
     }
+
     /// Visit a single value in the [`Prison`], obtaining a mutable reference to the 
     /// value that is passed to a closure you provide.
     /// ### Example
@@ -203,21 +235,22 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn visit<F: FnMut(&mut T)>(&self, cell_index: usize, mut operation: F) -> Result<(), AccessError> {
-        let (current_visits, cells) = self.count_vec.open();
-        if cell_index >= cells.len() {
+        let internal = self.internal();
+        if cell_index >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(cell_index));
         }
-        let (locked, val) = (&cells[cell_index]).open();
-        if *locked {
+        let cell = &mut internal.vec[cell_index];
+        if cell.locked {
             return Err(AccessError::CellAlreadyBeingVisited(cell_index));
         }
-        *current_visits += 1;
-        *locked = true;
-        operation(val);
-        *locked = false;
-        *current_visits -= 1;
+        internal.visit_count += 1;
+        cell.locked = true;
+        operation(&mut cell.val);
+        cell.locked = false;
+        internal.visit_count -= 1;
         return Ok(());
     }
+
     /// Visit many values in the [`Prison`] at the same time, obtaining a mutable reference
     /// to all of them in the same closure and in the same order they were requested.
     /// ### Example
@@ -274,31 +307,31 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn visit_many<F: FnMut(&mut[&mut T])>(&self, cell_indices: &[usize], mut operation: F) -> Result<(), AccessError> {
-        let (current_visits, cells) = self.count_vec.open();
+        let internal = self.internal();
         let mut vals = Vec::new();
         let mut locks = Vec::new();
         let mut ret_value = Ok(());
         for idx in cell_indices {
-            if *idx >= cells.len() {
+            if *idx >= self.len() {
                 ret_value = Err(AccessError::IndexOutOfRange(*idx));
                 break;
             }
-            let (locked, val) = (&cells[*idx]).open();
-            if *locked {
+            let cell = &mut self.internal().vec[*idx];
+            if cell.locked {
                 ret_value = Err(AccessError::CellAlreadyBeingVisited(*idx));
                 break;
             }
-            *locked = true;
-            locks.push(locked);
-            vals.push(val);
+            cell.locked = true;
+            locks.push(&mut cell.locked);
+            vals.push(&mut cell.val);
         }
         if ret_value.is_ok() {
-            *current_visits += 1;
+            internal.visit_count += 1;
             operation(vals.as_mut_slice());
-            *current_visits -= 1;
+            internal.visit_count -= 1;
         }
         for lock in locks {
-            *lock = false
+            *lock = false;
         }
         return ret_value;
     }
@@ -390,19 +423,19 @@ impl<T> Prison<T> {
 
     #[doc(hidden)]
     fn visit_with_index<F: FnMut(usize, &mut T)>(&self, cell_index: usize, mut operation: F) -> Result<(), AccessError> {
-        let (current_visits, cells) = self.count_vec.open();
-        if cell_index >= cells.len() {
+        let internal = self.internal();
+        if cell_index >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(cell_index));
         }
-        let (locked, val) = (&cells[cell_index]).open();
-        if *locked {
+        let cell = &mut internal.vec[cell_index];
+        if cell.locked {
             return Err(AccessError::CellAlreadyBeingVisited(cell_index));
         }
-        *current_visits += 1;
-        *locked = true;
-        operation(cell_index, val);
-        *locked = false;
-        *current_visits -= 1;
+        internal.visit_count += 1;
+        cell.locked = true;
+        operation(cell_index, &mut cell.val);
+        cell.locked = false;
+        internal.visit_count -= 1;
         return Ok(());
     }
 

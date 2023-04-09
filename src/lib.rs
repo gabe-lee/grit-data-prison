@@ -28,10 +28,10 @@
 #![deny(missing_docs)]
 
 #[cfg(not(feature = "no_std"))]
-use std::{cell::UnsafeCell, ops::RangeBounds, error::Error, fmt::{Display, Debug}};
+use std::{ops::RangeBounds, error::Error, fmt::{Display, Debug}};
 
 #[cfg(feature = "no_std")]
-use core::{cell::UnsafeCell, ops::RangeBounds, fmt::{Display, Debug}};
+use core::{ops::RangeBounds, fmt::{Display, Debug}};
 
 #[cfg(feature = "no_std")]
 trait Error: Debug + Display {
@@ -110,40 +110,6 @@ impl Debug for AccessError {
 
 impl Error for AccessError {}
 
-#[doc(hidden)]
-#[derive(Debug)]
-pub(crate) struct LockValPair<T>(UnsafeCell<(bool, T)>);
-
-#[doc(hidden)]
-impl<T> LockValPair<T> {
-    pub(crate) fn new(val: T) -> LockValPair<T> {
-        return LockValPair(UnsafeCell::new((false, val)));
-    }
-
-    pub(crate) fn open(&self) -> (&mut bool, &mut T) {
-        let mut_pair = unsafe { &mut *self.0.get() };
-        return (&mut mut_pair.0, &mut mut_pair.1);
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub(crate) struct CountVecPair<T>(UnsafeCell<(usize, Vec<LockValPair<T>>)>);
-
-impl<T> CountVecPair<T> {
-    pub(crate) fn new() -> Self {
-        return Self(UnsafeCell::new((0, Vec::new())));
-    }
-
-    pub(crate) fn with_capacity(size: usize) -> Self {
-        return Self(UnsafeCell::new((0, Vec::with_capacity(size))));
-    }
-
-    pub(crate) fn open(&self) -> (&mut usize, &mut Vec<LockValPair<T>>) {
-        let mut_pair = unsafe { &mut *self.0.get() };
-        return (&mut mut_pair.0, &mut mut_pair.1);
-    }
-}
 
 #[doc(hidden)]
 fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize) 
