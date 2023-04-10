@@ -243,12 +243,16 @@ pub enum AccessError {
     CellAlreadyBeingVisited(usize),
     /// Indicates that a push would require re-allocation of the internal `Vec<T>`, thereby invalidating
     /// any current visits
-    PushAtMaxCapacityWhileVisiting,
+    InsertAtMaxCapacityWhileVisiting,
     /// Indicates that the last element in the [`Prison<T>`] is being accessed, and `pop()`-ing the value out
     /// of the underlying `Vec<T>` would invalidate the reference
     PopWhileLastElementIsVisited(usize),
     /// Indicates that the underlying `Vec<T>` is empty, and there is nothing to `pop()` out
-    PopOnEmptyPrison
+    PopOnEmptyPrison,
+    /// Indicates that the value requested was deleted and a new value with an updated generation took its place
+    ValueDeleted(usize, usize),
+    /// Indicates that a very large number of removes and inserts caused the generation counter to reach its max value
+    MaxValueForGenerationReached,
 }
 
 impl Display for AccessError {
@@ -256,9 +260,11 @@ impl Display for AccessError {
         match *self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited", idx),
-            Self::PushAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity, cannot push() new value while visiting"),
+            Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity, cannot push() new value while visiting"),
             Self::PopWhileLastElementIsVisited(idx) => write!(f, "Last index [{}] is being visited, cannot pop() it out", idx),
             Self::PopOnEmptyPrison => write!(f, "Prison is empty, nothing to pop() out"),
+            Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted", idx, gen),
+            Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached"),
         }
     }
 }
@@ -268,15 +274,52 @@ impl Debug for AccessError {
         match *self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited\n---------\nVisiting the same cell twice would give two mutable references to the same memory. You could potentially alter some expected pre-condition the compiler expects of the value, such as changing an Enum's Variant or deleting all the items from a Vector expected to have a non-zero length.", idx),
-            Self::PushAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity\n---------\nPushing to a Vec at max capacity while a visit is in progress may cause re-allocation that will invalidate value references"),
+            Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity\n---------\nPushing to a Vec at max capacity while a visit is in progress may cause re-allocation that will invalidate value references"),
             Self::PopWhileLastElementIsVisited(idx) => write!(f, "Last index [{}] is being visited, cannot pop() it out\n---------\nThe referenced data will become invalid, as there is no guarantee the data will not be overwritten as it no longer belongs to the Vec", idx),
             Self::PopOnEmptyPrison => write!(f, "Prison is empty, nothing to pop() out"),
+            Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted\n---------\nWhen deleting a value, it is recomended you take steps to invalidate any held keys refering to it", idx, gen),
+            Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached\n---------\nA large number of removals and inserts has caused the generation counter to reach its max value. Manually perform a Prison::purge() and re-issue the keys to continue using this Prison"),
         }
     }
 }
 
 impl Error for AccessError {}
 
+/// Struct that defines a packaged index into a [Prison](crate::single_threaded::Prison)
+/// 
+/// This struct is designed to be passed to some other struct or function that needs to be able to
+/// reference the data stored at the cell number.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct CellKey {
+    idx: usize,
+    gen: usize,
+}
+
+impl CellKey {
+    /// Create a new index from an index and generation
+    /// 
+    /// Not recomended in most cases, as there is no way to guarantee an item with that
+    /// exact index and generation exists in your [Prison](crate::single_threaded::Prison)
+    pub fn from_raw_parts(idx: usize, gen: usize) -> CellKey {
+        return CellKey { idx, gen };
+    }
+
+    /// Return the internal index and generation from the cell key
+    /// 
+    /// Not recomended in most cases. If you need just the index by itself,
+    /// use [CellKey::idx()] instead
+    pub fn into_raw_parts(&self) -> (usize, usize) {
+        return (self.idx, self.gen);
+    }
+
+    /// Return only the index of the [CellKey]
+    /// 
+    /// Usefull if you want to only get the value at the specified index in the [Prison](crate::single_threaded::Prison)
+    /// without checking the generations match
+    pub fn idx(&self) -> usize {
+        return self.idx
+    }
+}
 
 #[doc(hidden)]
 fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize) 

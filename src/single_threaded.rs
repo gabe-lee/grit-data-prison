@@ -4,20 +4,30 @@ use std::{ops::RangeBounds, cell::UnsafeCell};
 #[cfg(feature = "no_std")]
 use core::{ops::RangeBounds, cell::UnsafeCell};
 
-use crate::{AccessError, extract_true_start_end};
+use crate::{AccessError, CellKey, extract_true_start_end, CellKey};
 
 #[doc(hidden)]
 #[derive(Debug)]
 struct PrisonInternal<T> {
     visit_count: usize,
-    vec: Vec<PrisonCellInternal<T>>
+    gen: usize,
+    next_free: usize,
+    vec: Vec<CellOrFree<T>>
 }
 
 #[doc(hidden)]
 #[derive(Debug)]
 struct PrisonCellInternal<T> {
     locked: bool,
+    gen: usize,
     val: T,
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+enum CellOrFree<T> {
+    Cell(PrisonCellInternal<T>),
+    Free(usize, usize)
 }
 
 /// The single-threaded implementation of [`Prison<T>`]
@@ -49,7 +59,7 @@ impl<T> Prison<T> {
     /// ```
     pub fn new() -> Self {
         return Self { 
-            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, vec: Vec::new() })
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, gen: 0, next_free: 0, vec: Vec::new() })
         };
     }
 
@@ -68,7 +78,7 @@ impl<T> Prison<T> {
     /// ```
     pub fn with_capacity(size: usize) -> Self {
         return Self { 
-            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, vec: Vec::with_capacity(size) })
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, gen: 0, next_free: 0, vec: Vec::with_capacity(size) })
         };
     }
 
@@ -82,8 +92,7 @@ impl<T> Prison<T> {
     /// Length refers to the number of *filled* indexes in an Vec,
     /// not necessarily the number of reserved spaces in memory allocated to it.
     pub fn len(&self) -> usize {
-        let internal = self.internal();
-        return internal.vec.len();
+        return self.internal().vec.len();
     }
 
     /// Return the capacity of the underlying `Vec`
@@ -91,26 +100,37 @@ impl<T> Prison<T> {
     /// Capacity refers to the number of total spaces in memory reserved for the Vec
     /// to *possibly* use, not the number it currently *has* used
     pub fn cap(&self) -> usize {
-        let internal = self.internal();
-        return internal.vec.capacity();
+        return self.internal().vec.capacity();
     }
 
-    
+    #[doc(hidden)]
+    fn insert_internal(&self, value: T, index: usize) -> CellKey {
+        let internal = self.internal();
+        internal.vec[index] = CellOrFree::Cell(PrisonCellInternal { locked: false, gen: internal.gen, val: value });
+        return CellKey { idx: index, gen: internal.gen }
+    }
 
-    /// Add a value onto the end of the underlying `Vec` and return the index it was
-    /// added at.
+    #[doc(hidden)]
+    fn push_internal(&self, value: T) -> CellKey {
+        let internal = self.internal();
+        let idx = internal.vec.len();
+        internal.vec.push(CellOrFree::Cell(PrisonCellInternal { locked: false, gen: internal.gen, val: value }));
+        return CellKey { idx, gen: internal.gen }
+    }
+
+    /// Add a value into the [Prison] and recieve a CellKey that can be used to reference it in the future
     /// 
-    /// As long as there is sufficient capacity to do so, you may `push()`
-    /// to the [`Prison`] while in the middle of any `visit()`
+    /// As long as there is sufficient free cells or vector capacity to do so,
+    /// you may `insert()` to the [`Prison`] while in the middle of any `visit()`
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::single_threaded::Prison;
     /// # fn main() {
     /// let string_prison: Prison<String> = Prison::with_capacity(10);
-    /// let idx_0 = string_prison.push(String::from("Hello, ")).unwrap();
-    /// string_prison.visit(idx_0, |first_string| {
-    ///     let idx_1 = string_prison.push(String::from("World!")).unwrap();
-    ///     string_prison.visit(idx_1, |second_string| {
+    /// let key_0 = string_prison.insert(String::from("Hello, ")).unwrap();
+    /// string_prison.visit(key_0, |first_string| {
+    ///     let key_1 = string_prison.insert(String::from("World!")).unwrap();
+    ///     string_prison.visit(key_1, |second_string| {
     ///         let hello_world = format!("{}{}", first_string, second_string);
     ///         assert_eq!(hello_world, "Hello, World!");
     ///     });
@@ -126,20 +146,34 @@ impl<T> Prison<T> {
     /// # use grit_data_prison::single_threaded::Prison;
     /// # fn main() {
     /// let string_prison: Prison<String> = Prison::with_capacity(1);
-    /// string_prison.push(String::from("Hello, "));
+    /// string_prison.insert(String::from("Hello, "));
     /// string_prison.visit(0, |first_string| {
-    ///     assert!(string_prison.push(String::from("World!")).is_err());
+    ///     assert!(string_prison.insert(String::from("World!")).is_err());
     /// });
     /// # }
     /// ```
-    pub fn push(&self, value: T) -> Result<usize, AccessError> {
+    pub fn insert(&self, value: T) -> Result<CellKey, AccessError> {
         let internal = self.internal();
-        let new_idx = internal.vec.len();
-        if new_idx >= internal.vec.capacity() && internal.visit_count > 0 {
-            return Err(AccessError::PushAtMaxCapacityWhileVisiting);
+        let mut new_idx = internal.next_free;
+        let vec_len = internal.vec.len();
+        if new_idx < vec_len {
+            if let CellOrFree::Free(next_free, last_gen) = internal.vec[new_idx] {
+                internal.next_free = next_free;
+                if last_gen >= internal.gen {
+                    if last_gen == usize::MAX {
+                        return Err(AccessError::MaxValueForGenerationReached)
+                    }
+                    internal.gen = last_gen + 1;
+                }
+                return Ok(self.insert_internal(value, new_idx));
+            } else {
+                new_idx = vec_len;
+            }
         }
-        internal.vec.push(PrisonCellInternal { locked: false, val: value });
-        return Ok(new_idx);
+        if new_idx >= internal.vec.capacity() && internal.visit_count > 0 {
+            return Err(AccessError::InsertAtMaxCapacityWhileVisiting);
+        }
+        return Ok(self.push_internal(value));
     }
 
     /// Remove the last element from the underlying `Vec` and return the value
@@ -176,12 +210,16 @@ impl<T> Prison<T> {
     /// });
     /// # }
     /// ```
-    pub fn pop(&self) -> Result<T, AccessError> {
+    pub fn remove(&self, key: CellKey) -> Result<T, AccessError> {
         let internal = self.internal();
-        if internal.vec.len() == 0 {
-            return Err(AccessError::PopOnEmptyPrison)
+        let vec_len = internal.vec.len();
+        if key.idx >= vec_len {
+            return Err(AccessError::IndexOutOfRange(key.idx))
         }
-        let last_idx = internal.vec.len()-1;
+        match internal.vec[key.idx] {
+            CellOrFree::Cell(cell) => todo!(),
+            CellOrFree::Free(next_idx, last_gen) => todo!(),
+        }
         let last_locked = internal.vec[last_idx].locked;
         if last_locked {
             return Err(AccessError::PopWhileLastElementIsVisited(last_idx));
