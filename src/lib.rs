@@ -1,8 +1,8 @@
-/*! This crate provides the generic type [Prison<T>](crate::single_threaded::Prison), a data structure that uses an underlying [`Vec<T>`]
+/*! This crate provides the generic type [Prison<T>](crate::single_threaded::Prison), a data structure that uses an underlying [Vec<T>]
  to store values of the same type, but allows simultaneous interior mutability to each and every
  value by providing `.visit()` methods that take closures that are passed mutable references to the values.
  
- This documentation describes the usage of [`Prison<T>`](crate::single_threaded::Prison), how its [Vec] analogous methods differ from
+ This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its [Vec] analogous methods differ from
  those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
  
  # Motivation
@@ -23,8 +23,8 @@
  [dependencies]
  grit-data-prison = "0.1.2"
  ```
- Then import [`AccessError`] from the crate root, along with the relevant version you wish to use in
- the file where it is needed (right now only one flavor is available, [`single_threaded`]):
+ Then import [AccessError] from the crate root, along with the relevant version you wish to use in
+ the file where it is needed (right now only one flavor is available, [single_threaded]):
  ```rust
  use grit_data_prison::{AccessError, single_threaded::Prison};
  ```
@@ -207,13 +207,13 @@ trait Error: Debug + Display {
     }
 }
 
-/// Module defining the version(s) of [`Prison<T>`] suitable for use only from within a single-thread
+/// Module defining the version(s) of [Prison<T>] suitable for use only from within a single-thread
 pub mod single_threaded;
 
-/// Error type that provides helpful information about why an operation on any [`Prison<T>`] failed
+/// Error type that provides helpful information about why an operation on any [Prison<T>] failed
 /// 
 /// Every error returned from functions or methods defined in this crate will be one of these variants,
-/// and nearly all versions of [`Prison<T>`] are designed to never panic and always return errors.
+/// and nearly all versions of [Prison<T>] are designed to never panic and always return errors.
 /// 
 /// Additional variants may be added in the future, therefore it is recommended you add a catch-all branch
 /// to any match statements on this enum to future-proof your code:
@@ -223,33 +223,33 @@ pub mod single_threaded;
 /// # let acc_err = AccessError::IndexOutOfRange(100);
 /// match acc_err {
 ///     AccessError::IndexOutOfRange(bad_idx) => {},
-///     AccessError::CellAlreadyBeingVisited(double_idx) => {},
+///     AccessError::CellAlreadyBeingVisited(duplicate_idx) => {},
 ///     // other variants
 ///     _ => {}
 /// }
 /// # }
 /// ```
 /// 
-/// [`AccessError`] has a custom implementation for both [`std::fmt::Display`] and 
-/// [`std::fmt::Debug`] traits, with the `Display` version giving a short description of the problem,
+/// [AccessError] has a custom implementation for both [std::fmt::Display] and 
+/// [std::fmt::Debug] traits, with the `Display` version giving a short description of the problem,
 /// and the `Debug` version giving a more in-depth explaination of exactly why an error had to be
 /// returned
 pub enum AccessError {
-    /// Indicates that an operation attempted to access an index beyond the range of the [`Prison<T>`],
+    /// Indicates that an operation attempted to access an index beyond the range of the [Prison<T>],
     /// along with the offending index
     IndexOutOfRange(usize),
     /// Indicates that an operation attempted to access an index already being accessed by another operation,
     /// along with the index in question
     CellAlreadyBeingVisited(usize),
-    /// Indicates that a push would require re-allocation of the internal `Vec<T>`, thereby invalidating
+    /// Indicates that an insert would require re-allocation of the internal [Vec<T>], thereby invalidating
     /// any current visits
     InsertAtMaxCapacityWhileVisiting,
-    /// Indicates that the last element in the [`Prison<T>`] is being accessed, and `pop()`-ing the value out
-    /// of the underlying `Vec<T>` would invalidate the reference
-    PopWhileLastElementIsVisited(usize),
-    /// Indicates that the underlying `Vec<T>` is empty, and there is nothing to `pop()` out
-    PopOnEmptyPrison,
+    /// Indicates that the last element in the [Prison<T>](crate::single_threaded::Prison) is being accessed, and `pop()`-ing the value out
+    /// of the underlying [Vec<T>] would invalidate the reference
+    RemoveWhileCellBeingVisited(usize),
     /// Indicates that the value requested was deleted and a new value with an updated generation took its place
+    /// 
+    /// Contains the index and generation from the invalid CellKey, in that order
     ValueDeleted(usize, usize),
     /// Indicates that a very large number of removes and inserts caused the generation counter to reach its max value
     MaxValueForGenerationReached,
@@ -261,10 +261,9 @@ impl Display for AccessError {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited", idx),
             Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity, cannot push() new value while visiting"),
-            Self::PopWhileLastElementIsVisited(idx) => write!(f, "Last index [{}] is being visited, cannot pop() it out", idx),
-            Self::PopOnEmptyPrison => write!(f, "Prison is empty, nothing to pop() out"),
             Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted", idx, gen),
             Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached"),
+            Self::RemoveWhileCellBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove", idx),
         }
     }
 }
@@ -275,10 +274,9 @@ impl Debug for AccessError {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited\n---------\nVisiting the same cell twice would give two mutable references to the same memory. You could potentially alter some expected pre-condition the compiler expects of the value, such as changing an Enum's Variant or deleting all the items from a Vector expected to have a non-zero length.", idx),
             Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity\n---------\nPushing to a Vec at max capacity while a visit is in progress may cause re-allocation that will invalidate value references"),
-            Self::PopWhileLastElementIsVisited(idx) => write!(f, "Last index [{}] is being visited, cannot pop() it out\n---------\nThe referenced data will become invalid, as there is no guarantee the data will not be overwritten as it no longer belongs to the Vec", idx),
-            Self::PopOnEmptyPrison => write!(f, "Prison is empty, nothing to pop() out"),
             Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted\n---------\nWhen deleting a value, it is recomended you take steps to invalidate any held keys refering to it", idx, gen),
             Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached\n---------\nA large number of removals and inserts has caused the generation counter to reach its max value. Manually perform a Prison::purge() and re-issue the keys to continue using this Prison"),
+            Self::RemoveWhileCellBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove\n---------\nRemoving a value with an active mutable reference in scope will overwrite the memory at that location and invalidate the reference", idx),
         }
     }
 }
