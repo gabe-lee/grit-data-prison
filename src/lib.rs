@@ -1,197 +1,274 @@
-/*! This crate provides the generic type [Prison<T>](crate::single_threaded::Prison), a data structure that uses an underlying [Vec<T>]
- to store values of the same type, but allows simultaneous interior mutability to each and every
- value by providing `.visit()` methods that take closures that are passed mutable references to the values.
- 
- This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its [Vec] analogous methods differ from
- those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
- 
- ## NOTE
- This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
- - Version 0.2.0 has a different API than version 0.1.2 and is a move from a plain Vec to a Generational Arena
+/*!This crate provides the struct [Prison<T>](crate::single_threaded::Prison), an arena data structure 
+that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
+that take closures that are passed mutable references to the values.
 
- # Motivation
+This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its methods differ from
+those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
+
+## Quick Look
+- Uses an underlying [Vec<T>] to store items of the same type
+- Acts primarily as a Generational Arena, where each element is accessed using a [CellKey] that differentiates two values that may have been located at the same index but represent fundamentally separate data
+- Can *also* be indexed with a plain [usize] for simple use cases
+- Provides safe (***needs verification***) interior mutability by only providing mutable references to values using closures to define strict scopes where they are valid and hide the setup/teardown for safety checks
+- Uses [bool] locks on each element and a master [usize] counter to track the number/location of active references and prevent mutable reference aliasing and disallow scenarios that could invalidate existing references
+- [CellKey] uses a [usize] index and [usize] generation to match an index to the context in which it was created and prevent two unrelated values that both at some point lived at the same index from being mistaken as equal
+- All methods return an [AccessError] where the scenario would cause a panic if not caught
  
- I wanted a data structure that met these criteria:
- - Backed by a [Vec<T>] (or similar) for cache efficiency
- - Allowed interior mutability to each of its elements
- - Was fully memory safe (**needs verification**)
- - Always returned a relevant error instead of panicing
- - Was easier to reason about when and where it might error than reference counting
+## NOTE
+This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
+See [changelog](#Changelog)
+
+# Motivation
  
- # Usage
+I wanted a data structure that met these criteria:
+- Backed by a [Vec<T>] (or similar) for cache efficiency
+- Allowed interior mutability to each of its elements
+- Was fully memory safe (***needs verification***)
+- Always returned a relevant error instead of panicking
+- Was easier to reason about when and where it might error than reference counting
  
- This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
+# Usage
  
- First, add this crate as a dependency to your project:
- ```toml
- [dependencies]
- grit-data-prison = "0.1.2"
- ```
- Then import [AccessError] from the crate root, along with the relevant version you wish to use in
- the file where it is needed (right now only one flavor is available, [single_threaded]):
- ```rust
- use grit_data_prison::{AccessError, single_threaded::Prison};
- ```
- Create a prison and add your data to it (NOTE that it does not have to be declared `mut`)
- ```rust
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- # fn main() {
- let prison: Prison<String> = Prison::new();
- prison.push(String::from("Hello, "));
- prison.push(String::from("World!"));
- # }
- ```
- You can then use one of the `.visit()` methods to access a mutable reference
- to your data from within a closure
- ```rust
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- # fn main() {
- # let prison: Prison<String> = Prison::new();
- # prison.push(String::from("Hello, "));
- # prison.push(String::from("World!"));
- prison.visit(1, |val_at_idx_1| {
-     *val_at_idx_1 = String::from("Rust!!");
- });
- # }
- ```
- Visiting multiple values at the same time can be done by nesting `.visit()` calls,
- or by using one of the batch `.visit()` methods
- ```rust
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- # fn main() {
- # let prison: Prison<String> = Prison::new();
- # prison.push(String::from("Hello, "));
- # prison.push(String::from("World!"));
- # prison.visit(1, |val_at_idx_1| {
- #    *val_at_idx_1 = String::from("Rust!!");
- # });
- prison.visit(0, |val_0| {
-     prison.visit(1, |val_1| {
-         println!("{}{}", *val_0, *val_1); // Prints "Hello, Rust!!"
-     });
- });
- prison.visit_many(&[0, 1], |vals| {
-     println!("{}{}", vals[0], vals[1]); // Also prints "Hello, Rust!!"
- });
- # }
- ```
- Operations that affect the underlying Vector can also be done
- from *within* `.visit()` closures as long as none of the following rules are violated:
- - The operation does not remove, read, or modify any element that is *currently* being visited
- - The operation does not cause a re-allocation of the entire Vector (or otherwise cause the entire Vector to relocate to another memory address)
- ```rust
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- # fn main() {
- let prison: Prison<u64> = Prison::with_capacity(10);
- prison.push(0);
- prison.push(10);
- prison.push(20);
- prison.push(30);
- prison.push(42);
- let mut accidental_val: u64 = 0;
- prison.visit(3, |val| {
-     accidental_val = prison.pop().unwrap();
-     prison.push(40);
- });
- # }
- ```
+This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
  
- For more examples, see the specific documentation for the relevant type/method
+First, add this crate as a dependency to your project:
+```toml
+[dependencies]
+grit-data-prison = "0.2"
+```
+Then import [AccessError] and [CellKey] from the crate root, along with the relevant version you wish to use in
+the file where it is needed (right now only one flavor is available, [single_threaded]):
+```rust
+use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+```
+Create a [Prison<T>](crate::single_threaded::Prison) and add your data to it using one of the `insert()` type methods
  
- # Why this strange syntax?
+Note the following quirks:
+- A [Prison](crate::single_threaded::Prison) does not need to be declared `mut` to mutate it
+- `insert()` and its variants return a [Result]<[CellKey], [AccessError]> that you need to handle
+- You can ignore the [CellKey] and simply look up the value by index if you wish (shown later)
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# fn main() -> Result<(), AccessError> {
+let prison: Prison<String> = Prison::new();
+let key_hello = prison.insert(String::from("Hello, "))?;
+prison.insert(String::from("World!"))?;
+# Ok(())
+# }
+```
+You can then use one of the `.visit()` methods to access a mutable reference
+to your data from within a closure
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# fn main() -> Result<(), AccessError> {
+# let prison: Prison<String> = Prison::new();
+# let key_hello = prison.insert(String::from("Hello, "))?;
+# prison.insert(String::from("World!"))?;
+prison.visit_idx(1, |val_at_idx_1| {
+       *val_at_idx_1 = String::from("Rust!!");
+       Ok(())
+});
+# Ok(())
+# }
+```
+Visiting multiple values at the same time can be done by nesting `.visit()` calls,
+or by using one of the batch `.visit()` methods
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# fn main() -> Result<(), AccessError> {
+# let prison: Prison<String> = Prison::new();
+# let key_hello = prison.insert(String::from("Hello, "))?;
+# prison.insert(String::from("World!"))?;
+# prison.visit_idx(1, |val_at_idx_1| {
+#        *val_at_idx_1 = String::from("Rust!!");
+#        Ok(())
+# });
+prison.visit(key_hello, |val_0| {
+    prison.visit_idx(1, |val_1| {
+        println!("{}{}", *val_0, *val_1); // Prints "Hello, Rust!!"
+        Ok(())
+    });
+    Ok(())
+});
+prison.visit_many_idx(&[0, 1], |vals| {
+    println!("{}{}", vals[0], vals[1]); // Also prints "Hello, Rust!!"
+    Ok(())
+});
+# Ok(())
+# }
+```
+### Full Example Code
+```rust
+use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+
+fn main() -> Result<(), AccessError> {
+    let prison: Prison<String> = Prison::new();
+    let key_hello = prison.insert(String::from("Hello, "))?;
+    prison.insert(String::from("World!"))?;
+    prison.visit_idx(1, |val_at_idx_1| {
+        *val_at_idx_1 = String::from("Rust!!");
+        Ok(())
+    });
+    prison.visit(key_hello, |val_0| {
+        prison.visit_idx(1, |val_1| {
+            println!("{}{}", *val_0, *val_1); // Prints "Hello, Rust!!"
+            Ok(())
+        });
+        Ok(())
+    });
+    prison.visit_many_idx(&[0, 1], |vals| {
+        println!("{}{}", vals[0], vals[1]); // Also prints "Hello, Rust!!"
+        Ok(())
+    });
+    Ok(())
+}
+```
+Operations that affect the underlying [Vec] can also be done
+from *within* `.visit()` closures as long as none of the following rules are violated:
+- The operation does not remove, read, or modify any element that is *currently* being visited
+- The operation does not cause a re-allocation of the entire [Vec] (or otherwise cause the entire [Vec] to relocate to another memory address)
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# fn main() -> Result<(), AccessError> {
+let prison: Prison<u64> = Prison::with_capacity(10);
+prison.insert(0)?;
+prison.insert(10)?;
+prison.insert(20)?;
+prison.insert(30)?;
+prison.insert(42)?;
+let mut accidental_val: u64 = 0;
+prison.visit_idx(3, |val| {
+    accidental_val = prison.remove_idx(4)?;
+    prison.insert_at(4, 40);
+    Ok(())
+});
+# Ok(())
+# }
+```
+For more examples, see the specific documentation for the relevant type/method
  
- Closures provide a safe sandbox to access mutable references, 
- as they cant be moved out of the closure, and because they use generics the rust compiler can
- choose to inline them in many/most cases.
+# Why this strange syntax?
  
- # How is this safe?!
+Closures provide a safe sandbox to access mutable references, as they cant be moved out of the closure,
+and because the `visit()` functions that take the closures handle all of the
+safety and housekeeping needed before and after.
  
- The short answer is: it *should* be *mostly* safe.
- I welcome any feedback and analysis showing otherwise so I can fix it or revise my methodology.
+Since closures use generics the rust compiler can inline them in many/most/all? cases.
  
- [Prison](crate::single_threaded::Prison) follows a few simple rules:
- - One and ONLY one reference to any element can be in scope at any given time
- - Because we are only allowing one reference, that one reference will always be a mutable reference
- - Any method that would or *could* read, modify, or delete any element cannot be performed while that element is currently being visited
- - Any method that would or *could* cause the underlying Vector to relocate to a different spot in memory cannot be performed while even ONE visit is in progress
+# How is this safe?!
  
- It achieves all of the above with a few lightweight sentinel values:
- - A single [UnsafeCell](std::cell::UnsafeCell) to hold *all* of the [Prison](crate::single_threaded::Prison) internals and provide interior mutability
- - A master `visit_count` [usize] on Prison itself to track whether *any* visit is in progress
- - A `locked` [bool] on each element that prevents getting 2 mutable references to the same element
+The short answer is: it *should* be *mostly* safe.
+I welcome any feedback and analysis showing otherwise so I can fix it or revise my methodology.
  
- Attempting to perform an action that would violate any of these rules will either be prevented from compiling
- or return an [AccessError] that describes why it was an error, and should never panic.
- ### Example: compile-time safety
- ```compile_fail
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- # fn main() {
- let prison: Prison<String> = Prison::new();
- prison.push(String::from("cannot be stolen"));
- let mut steal_mut_ref: &mut String = String::new();
- let mut steal_prison: Prison<bool> = Prison::new();
- prison.visit(0, |mut_ref| {
-     // will not compile: (error[E0521]: borrowed data escapes outside of closure)
-     steal_mut_ref = mut_ref;
-     // will not compile: (error[E0505]: cannot move out of `prison` because it is borrowed)
-     steal_prison = prison;
- });
- # }
- ```
- ### Example: run-time safety
- ```rust
- # use grit_data_prison::{AccessError, single_threaded::Prison};
- struct MyStruct(u32);
+[Prison](crate::single_threaded::Prison) follows a few simple rules:
+- One and ONLY one reference to any element can be in scope at any given time
+- Because we are only allowing one reference, that one reference will always be a mutable reference
+- Any method that would or *could* read, modify, or delete any element cannot be performed while that element is currently being visited
+- Any method that would or *could* cause the underlying [Vec] to relocate to a different spot in memory cannot be performed while even ONE visit is in progress
+In addition, it provides the functionality of a Generational Arena with these additional rules:
+- The [Prison](crate::single_threaded::Prison) has a master generation counter to track the largest generation of any element inside it
+- Every valid element has a generation attatched to it, and `insert()` operations return a [CellKey] that pairs the element index with the current largest generation value
+- Any operation that removes *or* overwrites a valid element *with a genreation counter that is equal to the largest generation* causes the master generation counter to increase by one
  
- fn main() {
-     let prison: Prison<MyStruct> = Prison::with_capacity(2); // Note this prison can only hold 2 elements
-     prison.push(MyStruct(1));
-     prison.push(MyStruct(2));
-     prison.visit(0, |val_0| {
-         assert!(prison.visit(0, |val_0_again| {}).is_err());
-         assert!(prison.visit(3, |val_3_out_of_bounds| {}).is_err());
-         prison.visit(1, |val_1| {
-             assert!(prison.pop().is_err()); // would delete memory referenced by val_1
-             assert!(prison.push(MyStruct(3)).is_err()); // would cause reallocation and invalidate any current references
-         });
-     });
- }
- ```
+It achieves all of the above with a few lightweight sentinel values:
+- A single [UnsafeCell](std::cell::UnsafeCell) to hold *all* of the [Prison](crate::single_threaded::Prison) internals and provide interior mutability
+- A master `visit_count` [usize] on [Prison](crate::single_threaded::Prison) itself to track whether *any* visit is in progress
+- A master `generation` [usize] on [Prison](crate::single_threaded::Prison) itself to track largest generation
+- Each element is either a `Cell` or `Free` variant: 
+- - A `Free` Simply contains the value of the *next* free index after this one is filled
+- - A `locked` [bool] on each `Cell` that prevents getting 2 mutable references to the same element
+- - A `generation` [usize] on each `Cell` to use when matching to the [CellKey] used to access the index
+
+(see [performance](#Performance) for more info on specifics)
+
+Attempting to perform an action that would violate any of these rules will either be prevented from compiling
+or return an [AccessError] that describes why it was an error, and should never panic.
+### Example: compile-time safety
+```compile_fail
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# fn main() -> Result<(), AccessError> {
+let prison: Prison<String> = Prison::new();
+prison.insert(String::from("cannot be stolen"));
+let mut steal_mut_ref: &mut String;
+let mut steal_prison: Prison<String>;
+prison.visit_idx(0, |mut_ref| {
+    // will not compile: (error[E0521]: borrowed data escapes outside of closure)
+    steal_mut_ref = mut_ref;
+    // will not compile: (error[E0505]: cannot move out of `prison` because it is borrowed)
+    steal_prison = prison;
+    Ok(())
+});
+# Ok(())
+# }
+```
+### Example: run-time safety
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+struct MyStruct(u32);
+
+fn main() -> Result<(), AccessError> {
+    let prison: Prison<MyStruct> = Prison::with_capacity(2); // Note this prison can only hold 2 elements
+    let key_0 = prison.insert(MyStruct(1))?;
+    prison.insert(MyStruct(2))?;
+    prison.visit(key_0, |val_0| {
+        assert!(prison.visit(key_0, |val_0_again| Ok(())).is_err());
+        assert!(prison.visit_idx(0, |val_0_again| Ok(())).is_err());
+        assert!(prison.visit_idx(3, |val_3_out_of_bounds| Ok(())).is_err());
+        prison.visit_idx(1, |val_1| {
+            assert!(prison.remove_idx(1).is_err()); // would delete memory referenced by val_1
+            assert!(prison.remove(key_0).is_err()); // would delete memory referenced by val_0
+            assert!(prison.insert(MyStruct(3)).is_err()); // would cause reallocation and invalidate any current references
+            Ok(())
+        });
+        Ok(())
+    });
+    Ok(())
+}
+```
+# Performance
+
+### Speed
+(Benchmarks are Coming Soon™)
+
+### Size
+[Prison<T>](crate::single_threaded::Prison) has 4 [usize] house-keeping values in addition to a [Vec<CellOrFree<T>>]
+
+Each element in [Vec<CellOrFree<T>>] is Either a `Cell` variant or `Free` variant, so the marker is only a [u8]
+`Free` variant only contains a single [usize], so it is not the limiting variant
+`Cell` variant contains a [usize] generation counter, [bool] access lock, and a value of type `T`
+
+Therefore the total additional size compared to a [Vec<T>], per element, is 16 bytes
+
+# How this crate may change in the future
  
- # How this crate may change in the future
+This crate is very much UNSTABLE, meaning that not every error condition may have a test,
+methods may return different errors/values as my understanding of how they should be properly implemented
+evolves, I may add/remove methods altogether, etc.
  
- This crate is very much UNSTABLE, meaning that not every error condition may have a test,
- methods may return different errors/values as my understanding of how they should be properly implemented
- evolves, I may add/remove methods altogether, etc.
+Possible future additions may include:
+- [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
+- [ ] More public methods (as long as they make sense and don't bloat the API)
+- [ ] Multi-thread safe `AtomicPrison<T>`
+- [ ] ? Single standalone value version, `JailCell<T>`
+- [ ] ? Multi-thread safe standalone value version, `AtomicJailCell<T>`
+- [ ] ?? Completely unchecked and unsafe version `UnPrison<T>`
+- [ ] ??? Multi-thread ~~safe~~ unsafe version `AtomicUnPrison<T>`
  
- **In particular** I plan on moving from a simple [usize] index approach to a **Generational Arena** approach,
- where each element is indexed by both a [usize] and [u64] indicating which insert operation was responsible for them.
- Since reallocating faces particular challenges in this data structure, this would allow me to recycle empty indices
- and relax restictions on adding and removing elements without running into the
- [ABA problem](https://en.wikipedia.org/wiki/ABA_problem).
+# How to Help/Contribute
  
- For example, the implementation might look similar to the crate [generational-arena](https://crates.io/crates/generational-arena),
- however I will probably do it a little differently on the inside.
+This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
+The repo is [on github](https://github.com/gabe-lee/grit-data-prison)
  
- Other possible future additions may include:
- [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
- [ ] Multi-thread safe `AtomicPrison<T>`
- [ ] ? Single standalone value version, `JailCell<T>`
- [ ] ? Multi-thread safe standalone value version, `AtomicJailCell<T>`
- [ ] ? Completely unchecked and unsafe version `UnPrison<T>`
- [ ] ??? Multi-thread ~~safe~~ unsafe version `AtomicUnPrison<T>`
- 
- # How to Help/Contribute
- 
- This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
- The repo is [on github](https://github.com/gabe-lee/grit-data-prison)
- 
- Feel free to leave feedback!
- If you can give me concrete examples that *definitely* violate memory-safety, meaning
- that the provided mutable references can be made to point to invalid/illegal memory
- (without the use of additional unsafe :P), or otherwise cause unsafe conditions (for
- example changing an expected enum variant to another where the compiler doesnt expect it
- to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
+Feel free to leave feedback, or fork/branch the project and submit fixes/optimisations!
+
+If you can give me concrete examples that *definitely* violate memory-safety, meaning
+that the provided mutable references can be made to point to invalid/illegal memory
+(without the use of additional unsafe :P), or otherwise cause unsafe conditions (for
+example changing an expected enum variant to another where the compiler doesnt expect it
+to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
+# Changelog
+ - Version 0.2.x has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
+ - Version 0.1.x: first version, plain old [Vec] with [usize] indexing
 */
 
 #![deny(rustdoc::broken_intra_doc_links)]
@@ -206,7 +283,7 @@ use core::{ops::RangeBounds, fmt::{Display, Debug}};
 
 #[cfg(feature = "no_std")]
 trait Error: Debug + Display {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
@@ -214,10 +291,10 @@ trait Error: Debug + Display {
 /// Module defining the version(s) of [Prison<T>] suitable for use only from within a single-thread
 pub mod single_threaded;
 
-/// Error type that provides helpful information about why an operation on any [Prison<T>] failed
+/// Error type that provides helpful information about why an operation on any [Prison<T>](crate::single_threaded::Prison) failed
 /// 
 /// Every error returned from functions or methods defined in this crate will be one of these variants,
-/// and nearly all versions of [Prison<T>] are designed to never panic and always return errors.
+/// and nearly all versions of [Prison<T>](crate::single_threaded::Prison) are designed to never panic and always return errors.
 /// 
 /// Additional variants may be added in the future, therefore it is recommended you add a catch-all branch
 /// to any match statements on this enum to future-proof your code:
@@ -227,7 +304,7 @@ pub mod single_threaded;
 /// # let acc_err = AccessError::IndexOutOfRange(100);
 /// match acc_err {
 ///     AccessError::IndexOutOfRange(bad_idx) => {},
-///     AccessError::CellAlreadyBeingVisited(duplicate_idx) => {},
+///     AccessError::IndexAlreadyBeingVisited(duplicate_idx) => {},
 ///     // other variants
 ///     _ => {}
 /// }
@@ -240,7 +317,7 @@ pub mod single_threaded;
 /// returned
 #[derive(PartialEq, Eq)]
 pub enum AccessError {
-    /// Indicates that an operation attempted to access an index beyond the range of the [Prison<T>],
+    /// Indicates that an operation attempted to access an index beyond the range of the [Prison<T>](crate::single_threaded::Prison),
     /// along with the offending index
     IndexOutOfRange(usize),
     /// Indicates that an operation attempted to access an index already being accessed by another operation,
@@ -249,12 +326,12 @@ pub enum AccessError {
     /// Indicates that an insert would require re-allocation of the internal [Vec<T>], thereby invalidating
     /// any current visits
     InsertAtMaxCapacityWhileVisiting,
-    /// Indicates that the last element in the [Prison<T>](crate::single_threaded::Prison) is being accessed, and `pop()`-ing the value out
-    /// of the underlying [Vec<T>] would invalidate the reference
+    /// Indicates that the last element in the [Prison<T>](crate::single_threaded::Prison) is being accessed, and `remove()`-ing the value
+    /// from the underlying [Vec<T>] would invalidate the reference
     RemoveWhileIndexBeingVisited(usize),
     /// Indicates that the value requested was deleted and a new value with an updated generation took its place
     /// 
-    /// Contains the index and generation from the invalid CellKey, in that order
+    /// Contains the index and generation from the invalid [CellKey], in that order
     ValueDeleted(usize, usize),
     /// Indicates that a very large number of removes and inserts caused the generation counter to reach its max value
     MaxValueForGenerationReached,
@@ -325,8 +402,8 @@ impl CellKey {
 
     /// Return only the index of the [CellKey]
     /// 
-    /// Usefull if you want to only get the value at the specified index in the [Prison](crate::single_threaded::Prison)
-    /// without checking the generations match
+    /// Useful if you want to only get the value at the specified index in the [Prison](crate::single_threaded::Prison)
+    /// without checking that the generations match
     pub fn idx(&self) -> usize {
         return self.idx
     }

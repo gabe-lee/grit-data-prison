@@ -1,12 +1,12 @@
 [package]
 name = "grit-data-prison"
-description = "A crate providing the struct Prison<T>, a Vec-based data structure that allows full interior mutability to each and every index"
+description = "A crate providing the struct Prison<T>, a Generational Arena that allows full interior mutability to each and every element"
 version = "0.2.0"
 edition = "2021"
 authors = ["Gabriel Lee Anderson <gla.ander@gmail.com>"]
 repository = "https://github.com/gabe-lee/grit-data-prison.git"
 license = "BSD-3-Clause"
-keywords = ["arena", "interior-mutability"]
+keywords = ["arena", "interior-mutability", "generational-arena"]
 categories = ["data-structures", "no-std", "memory-management", "rust-patterns"]
 
 [dependencies]

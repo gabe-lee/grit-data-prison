@@ -6,43 +6,28 @@ use core::{ops::RangeBounds, cell::UnsafeCell, mem};
 
 use crate::{AccessError, CellKey, extract_true_start_end};
 
-#[doc(hidden)]
-#[derive(Debug)]
-struct PrisonInternal<T> {
-    visit_count: usize,
-    gen: usize,
-    next_free: usize,
-    vec: Vec<CellOrFree<T>>
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-struct PrisonCellInternal<T> {
-    locked: bool,
-    gen: usize,
-    val: T,
-}
-
-
-#[doc(hidden)]
-#[derive(Debug)]
-enum CellOrFree<T> {
-    Cell(PrisonCellInternal<T>),
-    Free(FreeCell)
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-struct FreeCell {
-    next_free_idx: usize, 
+macro_rules! internal {
+    ($p:ident) => {
+        unsafe {&mut *$p.internal.get()}
+    };
 }
 
 /// The single-threaded implementation of [Prison<T>]
 /// 
 /// This struct uses an underlying [Vec<T>] to store data, but provides full interior mutability
-/// for each of its elements. It does this by using [UnsafeCell], simple [bool] locks,
+/// for each of its elements. It primarily acts like a Generational Arena using [CellKey]'s to index
+/// into the vector, but allows accessing elements with only a plain [usize] as well.
+/// 
+/// It does this by using [UnsafeCell] to wrap its internals, simple [bool] locks,
 /// and a master [usize] counter that are used to determine what cells (indexes) are currently
 /// being accessed to prevent violating Rust's memory management rules (to the best of it's ability).
+/// Each element also has a [usize] `generation` counter to determine if the value being requested
+/// was created in the same context it is being requested in.
+/// 
+/// Removing elements does not shift all elements that come after it like a normal [Vec]. Instead,
+/// it marks the element as `free` meaning the value was deleted or removed. Subsequent inserts into
+/// the [Prison] will insert values into free spaces before they consider extending the [Vec],
+/// minimizing reallocations when possible.
 /// 
 /// See the crate-level documentation or individual methods for more info
 #[derive(Debug)]
@@ -50,78 +35,107 @@ pub struct Prison<T> {
     internal: UnsafeCell<PrisonInternal<T>>,
 }
 
+/**************************
+ *    PUBLIC INTERFACE
+ **************************/
+
 impl<T> Prison<T> {
 
     /// Create a new [Prison<T>] with the default allocation strategy ([Vec::new()])
     /// 
-    /// Because re-allocating the internal [Vec] comes with many restrictions,
-    /// it is recommended to use [Prison::with_capacity()] with a suitable 
-    /// best-guess starting value rather than [Prison::new()]
+    /// Because re-allocating the internal [Vec] comes with many restrictions when
+    /// `visit()`-ing elements, it is recommended to use [Prison::with_capacity()]
+    /// with a suitable best-guess starting value rather than [Prison::new()]
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
     /// # fn main() {
     /// let my_prison: Prison<u32> = Prison::new();
-    /// assert!(my_prison.cap() < 100)
+    /// assert!(my_prison.vec_cap() < 100)
     /// # }
     /// ```
     #[inline(always)]
     pub fn new() -> Self {
         return Self { 
-            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, gen: 0, next_free: NO_FREE, vec: Vec::new() })
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, free: 0, gen: 0, next_free: NO_FREE, vec: Vec::new() })
         };
     }
 
     /// Create a new [Prison<T>] with a specific starting capacity ([Vec::with_capacity()])
     /// 
-    /// Because re-allocating the internal [Vec] comes with many restrictions,
-    /// it is recommended to use [Prison::with_capacity()] with a suitable 
-    /// best-guess starting value rather than [Prison::new()]
+    /// Because re-allocating the internal [Vec] comes with many restrictions when
+    /// `visit()`-ing elements, it is recommended to use [Prison::with_capacity()]
+    /// with a suitable best-guess starting value rather than [Prison::new()]
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
     /// # fn main() {
     /// let my_prison: Prison<u32> = Prison::with_capacity(1000);
-    /// assert!(my_prison.cap() == 1000)
+    /// assert!(my_prison.vec_cap() == 1000)
     /// # }
     /// ```
     #[inline(always)]
     pub fn with_capacity(size: usize) -> Self {
         return Self { 
-            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, gen: 0, next_free: NO_FREE, vec: Vec::with_capacity(size) })
+            internal: UnsafeCell::new(PrisonInternal { visit_count: 0, free: 0, gen: 0, next_free: NO_FREE, vec: Vec::with_capacity(size) })
         };
     }
 
-    #[inline(always)]
-    fn internal(&self) -> &mut PrisonInternal<T> {
-        return unsafe { &mut *self.internal.get() };
-    }
-
-    /// Return the length of the underlying `Vec`
+    /// Return the length of the underlying [Vec]
     /// 
-    /// Length refers to the number of *filled* indexes in an Vec,
-    /// not necessarily the number of reserved spaces in memory allocated to it.
+    /// Because a [Prison] may have values that are `free` or `deleted` that are still counted
+    /// withing the `length` of the [Vec], this value should not be used to determine how many
+    /// *valid* elements exist in the [Prison]
     #[inline(always)]
-    pub fn len(&self) -> usize {
-        return self.internal().vec.len();
+    pub fn vec_len(&self) -> usize {
+        return internal!(self).vec.len();
     }
 
-    /// Return the capacity of the underlying `Vec`
+    /// Return the capacity of the underlying [Vec]
     /// 
-    /// Capacity refers to the number of total spaces in memory reserved for the Vec
-    /// to *possibly* use, not the number it currently *has* used
+    /// Capacity refers to the number of total spaces in memory reserved for the [Vec]
+    /// 
+    /// Because a [Prison] may have values that are `free` or `deleted` that are *not* counted
+    /// withing the `capacity` of the [Vec], this value should not be used to determine how many
+    /// *empty* spots exist to add elements into the [Prison]
     #[inline(always)]
-    pub fn cap(&self) -> usize {
-        return self.internal().vec.capacity();
+    pub fn vec_cap(&self) -> usize {
+        return internal!(self).vec.capacity();
     }
 
-    /// Add a value into the [Prison] and recieve a CellKey that can be used to reference it in the future
+    /// Return the number of spaces available for elements to be added to the [Prison]
+    /// without reallocating more memory.
+    #[inline(always)]
+    pub fn num_free(&self) -> usize {
+        let internal = internal!(self);
+        return internal.free + internal.vec.capacity() - internal.vec.len();
+    }
+
+    /// Return the number of spaces currently occupied by valid elements in the [Prison]
+    #[inline(always)]
+    pub fn num_used(&self) -> usize {
+        let internal = internal!(self);
+        return internal.vec.len() - internal.free;
+    }
+
+    /// Return the ratio of used space to total space in the [Prison]
+    /// 
+    /// 0.0 = 0% used, 1.0 = 100% used
+    pub fn density(&self) -> f32 {
+        let internal = internal!(self);
+        let used = internal.vec.len() - internal.free;
+        let cap = internal.vec.capacity();
+        return (used as f32) / (cap as f32);
+    }
+
+    /// Insert a value into the [Prison] and recieve a CellKey that can be used to 
+    /// reference it in the future
     /// 
     /// As long as there is sufficient free cells or vector capacity to do so,
     /// you may `insert()` to the [Prison] while in the middle of any `visit()`
     /// ### Example
     /// ```rust
-    /// # use use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
     /// # fn main() -> Result<(), AccessError> {
     /// let string_prison: Prison<String> = Prison::with_capacity(10);
     /// let key_0 = string_prison.insert(String::from("Hello, "))?;
@@ -137,13 +151,12 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    /// 
     /// However, if the [Prison] is at maxumum capacity, attempting to `insert()`
     /// during a visit will cause the operation to fail and a [AccessError::InsertAtMaxCapacityWhileVisiting]
     /// to be returned
     /// ### Example
     /// ```rust
-    /// # use use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
     /// # fn main() -> Result<(), AccessError> {
     /// let string_prison: Prison<String> = Prison::with_capacity(1);
     /// let key_0 = string_prison.insert(String::from("Hello, "))?;
@@ -159,9 +172,81 @@ impl<T> Prison<T> {
         self.insert_internal(0, false, false, value)
     }
 
-    /// Remove and return the element indexed by the provided CellKey
+    /// Insert a value into the [Prison] at the specified index and recieve a 
+    /// CellKey that can be used to reference it in the future
     /// 
-    /// As long as the element isn't being visited, you can `remove()` it,
+    /// The index *must* be within range of the underlying [Vec] *AND* must reference
+    /// a space tagged as free/deleted.
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let string_prison: Prison<String> = Prison::with_capacity(10);
+    /// let key_0 = string_prison.insert(String::from("Hello, "))?;
+    /// let key_1 = string_prison.insert(String::from("World!"))?;
+    /// string_prison.remove(key_1)?;
+    /// let key_1 = string_prison.insert_at(1, String::from("Rust!!"))?;
+    /// string_prison.visit_many(&[key_0, key_1], |vals| {
+    ///     let hello_world = format!("{}{}", vals[0], vals[1]);
+    ///     assert_eq!(hello_world, "Hello, Rust!!");
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// If the index is out of range the function will return an [AccessError::IndexOutOfRange(idx)],
+    /// and if the index is not free/deleted, it will return an [AccessError::IndexIsNotFree(idx)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let string_prison: Prison<String> = Prison::with_capacity(10);
+    /// let key_0 = string_prison.insert(String::from("Hello, "))?;
+    /// let key_1 = string_prison.insert(String::from("World!"))?;
+    /// assert!(string_prison.insert_at(1, String::from("Rust!!")).is_err());
+    /// assert!(string_prison.insert_at(10, String::from("Oops...")).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub fn insert_at(&self, idx: usize, value: T) -> Result<CellKey, AccessError> {
+        self.insert_internal(idx, true, false, value)
+    }
+
+    /// Insert or overwrite a value into the [Prison] at the specified index and recieve a 
+    /// CellKey that can be used to reference it in the future
+    /// 
+    /// Similar to [Prison::insert_at()] but does not require the space be marked as free.
+    /// 
+    /// Note: Overwriting a value that isn't marked as free will invalidate any [CellKey]
+    /// that could have been used to reference it and cause a lookup using the old
+    /// key(s) to return a [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let string_prison: Prison<String> = Prison::with_capacity(10);
+    /// let key_0 = string_prison.insert(String::from("Hello, "))?;
+    /// let key_1_a = string_prison.insert(String::from("World!"))?;
+    /// // string_prison.remove(key_1)?; // removal not needed
+    /// let key_1_b = string_prison.overwrite(1, String::from("Rust!!"))?;
+    /// string_prison.visit_many(&[key_0, key_1_b], |vals| {
+    ///     let hello_world = format!("{}{}", vals[0], vals[1]);
+    ///     assert_eq!(hello_world, "Hello, Rust!!");
+    ///     Ok(())
+    /// });
+    /// assert!(string_prison.visit(key_1_a, |deleted_val| Ok(())).is_err());
+    /// assert!(string_prison.overwrite(10, String::from("Oops...")).is_err());
+    /// # Ok(())
+    /// # }
+    #[inline(always)]
+    pub fn overwrite(&self, idx: usize, value: T) -> Result<CellKey, AccessError> {
+        self.insert_internal(idx, true, true, value)
+    }
+
+    /// Remove and return the element indexed by the provided [CellKey]
+    /// 
+    /// As long as the element isn't being visited, you can `.remove()` it,
     /// even from within an unrelated `.visit()`
     /// ### Example
     /// ```rust
@@ -179,9 +264,8 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    /// 
     /// However, if the element *is* being visited, `.remove()` will return an
-    /// [AccessError::RemoveWhileCellBeingVisited(usize)] error with the index in question
+    /// [AccessError::RemoveWhileIndexBeingVisited(idx)] error with the index in question
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
@@ -222,7 +306,6 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    /// 
     /// However, if the element *is* being visited, `.remove()` will return an
     /// [AccessError::RemoveWhileCellBeingVisited(usize)] error with the index in question
     /// ### Example
@@ -244,11 +327,11 @@ impl<T> Prison<T> {
     }
 
     /// Visit a single value in the [Prison], obtaining a mutable reference to the 
-    /// value that is passed to a closure you provide.
+    /// value that is passed into a closure you provide.
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
     /// let key_0 = u32_prison.insert(42)?;
     /// u32_prison.visit(key_0, |mut_ref_42| {
@@ -263,22 +346,22 @@ impl<T> Prison<T> {
     /// any time (and zero immutable references).
     /// 
     /// Attempting to visit the same cell twice will fail, returning an
-    /// [AccessError::CellAlreadyBeingVisited(usize)], attempting to visit an index
-    /// that is out of range returns an [AccessError::IndexOutOfRange(usize)],
-    /// and attempting to visit a value that was deleted returns an 
-    /// [AccessError::ValueDeleted(usize, usize)]
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to visit an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to visit a value that was deleted (generation doesnt match) returns an 
+    /// [AccessError::ValueDeleted(idx, gen)]
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
     /// let key_0 = u32_prison.insert(42)?;
     /// let key_1 = u32_prison.insert(69)?;
     /// u32_prison.remove(key_1)?;
     /// u32_prison.visit(key_0, |mut_ref_42| {
-    ///     assert!(u32_prison.visit(key_0, |mut_ref_42_again| {}).is_err());
-    ///     assert!(u32_prison.visit(CellKey::from_raw_parts(5, 5), |doesnt_exist| {}).is_err());
-    ///     assert!(u32_prison.visit(key_1, |deleted| {}).is_err());
+    ///     assert!(u32_prison.visit(key_0, |mut_ref_42_again| Ok(())).is_err());
+    ///     assert!(u32_prison.visit(CellKey::from_raw_parts(5, 5), |doesnt_exist| Ok(())).is_err());
+    ///     assert!(u32_prison.visit(key_1, |deleted| Ok(())).is_err());
     ///     Ok(())
     /// })?;
     /// # Ok(())
@@ -287,9 +370,9 @@ impl<T> Prison<T> {
     /// ### Example
     /// ```compile_fail
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// let key_0 = u32_prison.push(42)?;
+    /// let key_0 = u32_prison.insert(42)?;
     /// let mut try_to_take_the_ref: &mut u32 = &mut 0;
     /// u32_prison.visit(key_0, |mut_ref_42| {
     ///     // will not compile: (error[E0521]: borrowed data escapes outside of closure)
@@ -312,7 +395,7 @@ impl<T> Prison<T> {
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
     /// u32_prison.insert(42)?;
     /// u32_prison.visit_idx(0, |mut_ref_42| {
@@ -327,22 +410,22 @@ impl<T> Prison<T> {
     /// any time (and zero immutable references).
     /// 
     /// Attempting to visit the same cell twice will fail, returning an
-    /// [AccessError::CellAlreadyBeingVisited(usize)], attempting to visit an index
-    /// that is out of range returns an [AccessError::IndexOutOfRange(usize)],
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to visit an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
     /// and attempting to visit a value that was deleted returns an 
-    /// [AccessError::ValueDeleted(usize, usize)]
+    /// [AccessError::ValueDeleted(idx, gen)]
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
     /// u32_prison.insert(42)?;
     /// u32_prison.insert(69)?;
     /// u32_prison.remove_idx(1)?;
     /// u32_prison.visit_idx(0, |mut_ref_42| {
-    ///     assert!(u32_prison.visit_idx(0, |mut_ref_42_again| {}).is_err());
-    ///     assert!(u32_prison.visit_idx(5, |doesnt_exist| {}).is_err());
-    ///     assert!(u32_prison.visit_idx(1, |deleted| {}).is_err());
+    ///     assert!(u32_prison.visit_idx(0, |mut_ref_42_again| Ok(())).is_err());
+    ///     assert!(u32_prison.visit_idx(5, |doesnt_exist| Ok(())).is_err());
+    ///     assert!(u32_prison.visit_idx(1, |deleted| Ok(())).is_err());
     ///     Ok(())
     /// })?;
     /// # Ok(())
@@ -351,9 +434,9 @@ impl<T> Prison<T> {
     /// ### Example
     /// ```compile_fail
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42)?;
+    /// u32_prison.insert(42)?;
     /// let mut try_to_take_the_ref: &mut u32 = &mut 0;
     /// u32_prison.visit_idx(0, |mut_ref_42| {
     ///     // will not compile: (error[E0521]: borrowed data escapes outside of closure)
@@ -374,18 +457,20 @@ impl<T> Prison<T> {
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// let key_0 = u32_prison.push(42)?;
-    /// let key_1 = u32_prison.push(43);
-    /// let key_2 = u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.visit_many(&[3, 2, 1, 0], |first_four_reversed| {
+    /// let key_0 = u32_prison.insert(42)?;
+    /// let key_1 = u32_prison.insert(43)?;
+    /// let key_2 = u32_prison.insert(44)?;
+    /// let key_3 = u32_prison.insert(45)?;
+    /// u32_prison.visit_many(&[key_3, key_2, key_1, key_0], |first_four_reversed| {
     ///     assert_eq!(*first_four_reversed[0], 45);
     ///     assert_eq!(*first_four_reversed[1], 44);
     ///     assert_eq!(*first_four_reversed[2], 43);
     ///     assert_eq!(*first_four_reversed[3], 42);
-    /// });
+    ///     Ok(())
+    /// })?;
+    /// # Ok(())
     /// # }
     /// ```
     /// Just like `.visit()`, any particular cell can only be visited once,
@@ -393,35 +478,44 @@ impl<T> Prison<T> {
     /// `visit()`-family calls
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.visit_many(&[0, 2], |evens| {
-    ///     u32_prison.visit_many(&[1, 3], |odds| {
+    /// let key_0 = u32_prison.insert(42)?;
+    /// let key_1 = u32_prison.insert(43)?;
+    /// let key_2 = u32_prison.insert(44)?;
+    /// let key_3 = u32_prison.insert(45)?;
+    /// u32_prison.visit_many(&[key_0, key_2], |evens| {
+    ///     u32_prison.visit_many(&[key_1, key_3], |odds| {
     ///         assert_eq!(*evens[1], 44);
     ///         assert_eq!(*odds[1], 45);
+    ///         Ok(())
     ///     });
+    ///     Ok(())
     /// });
+    /// # Ok(())
     /// # }
     /// ```
     /// Attempting to visit the same cell twice will fail, returning an
-    /// [AccessError::CellAlreadyBeingVisited(usize)], and attempting to visit an index
-    /// that is out of range returns an [AccessError::IndexOutOfRange(usize)]
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to visit an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to visit a set of [CellKey]s with even *one* element free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// assert!(u32_prison.visit_many(&[0, 0], |double_idx_zero| {}).is_err());
-    /// assert!(u32_prison.visit_many(&[0, 1, 2, 3, 4], |invalid_idx| {}).is_err());
+    /// let key_0 = u32_prison.insert(42)?;
+    /// let key_1 = u32_prison.insert(43)?;
+    /// let key_2 = u32_prison.insert(44)?;
+    /// let key_3 = u32_prison.insert(45)?;
+    /// u32_prison.remove(key_1)?;
+    /// let key_4 = CellKey::from_raw_parts(4, 0);
+    /// assert!(u32_prison.visit_many(&[key_0, key_0], |double_key_zero| Ok(())).is_err());
+    /// assert!(u32_prison.visit_many(&[key_1, key_2, key_3], |key_1_removed| Ok(())).is_err());
+    /// assert!(u32_prison.visit_many(&[key_2, key_3, key_4], |key_4_invalid| Ok(())).is_err());
+    /// # Ok(())
     /// # }
     /// ```
     pub fn visit_many<F>(&self, keys: &[CellKey], mut operation: F) -> Result<(), AccessError> 
@@ -432,22 +526,24 @@ impl<T> Prison<T> {
     /// Visit many values in the [Prison] at the same time, obtaining a mutable reference
     /// to all of them in the same closure and in the same order they were requested.
     /// 
-    /// Similar to `visit_many()` except the generation tag on the element is ignored
+    /// Similar to [Prison::visit_many()] except the generation tag on the elements are ignored
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
-    /// # fn main() -> Result<T, AccessError> {
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// let key_0 = u32_prison.push(42)?;
-    /// let key_1 = u32_prison.push(43);
-    /// let key_2 = u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.visit_many(&[3, 2, 1, 0], |first_four_reversed| {
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.visit_many_idx(&[3, 2, 1, 0], |first_four_reversed| {
     ///     assert_eq!(*first_four_reversed[0], 45);
     ///     assert_eq!(*first_four_reversed[1], 44);
     ///     assert_eq!(*first_four_reversed[2], 43);
     ///     assert_eq!(*first_four_reversed[3], 42);
+    ///     Ok(())
     /// });
+    /// # Ok(())
     /// # }
     /// ```
     /// Just like `.visit_idx()`, any particular cell can only be visited once,
@@ -455,35 +551,43 @@ impl<T> Prison<T> {
     /// `visit()`-family calls
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.visit_many(&[0, 2], |evens| {
-    ///     u32_prison.visit_many(&[1, 3], |odds| {
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.visit_many_idx(&[0, 2], |evens| {
+    ///     u32_prison.visit_many_idx(&[1, 3], |odds| {
     ///         assert_eq!(*evens[1], 44);
     ///         assert_eq!(*odds[1], 45);
+    ///         Ok(())
     ///     });
+    ///     Ok(())
     /// });
+    /// # Ok(())
     /// # }
     /// ```
     /// Attempting to visit the same cell twice will fail, returning an
-    /// [AccessError::CellAlreadyBeingVisited(usize)], and attempting to visit an index
-    /// that is out of range returns an [AccessError::IndexOutOfRange(usize)]
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to visit an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to visit a set of indexes with even *one* element free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// assert!(u32_prison.visit_many(&[0, 0], |double_idx_zero| {}).is_err());
-    /// assert!(u32_prison.visit_many(&[0, 1, 2, 3, 4], |invalid_idx| {}).is_err());
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.remove_idx(1)?;
+    /// assert!(u32_prison.visit_many_idx(&[0, 0], |double_idx_zero| Ok(())).is_err());
+    /// assert!(u32_prison.visit_many_idx(&[1, 2, 3], |idx_1_removed| Ok(())).is_err());
+    /// assert!(u32_prison.visit_many_idx(&[2, 3, 4], |idx_4_invalid| Ok(())).is_err());
+    /// # Ok(())
     /// # }
     /// ```
     pub fn visit_many_idx<F>(&self, indexes: &[usize], mut operation: F) -> Result<(), AccessError> 
@@ -494,85 +598,100 @@ impl<T> Prison<T> {
 
     /// Visit a slice of values in the [Prison] at the same time, obtaining a mutable reference
     /// to all of them in the same closure.
+    /// 
+    /// Internally this is identical to passing [Prison::visit_many_idx()] a list of all
+    /// indexes in the slice range.
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.push(46);
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.insert(46)?;
     /// u32_prison.visit_slice(2..5, |last_three| {
     ///     assert_eq!(*last_three[0], 44);
     ///     assert_eq!(*last_three[1], 45);
     ///     assert_eq!(*last_three[2], 46);
+    ///     Ok(())
     /// });
+    /// # Ok(())
     /// # }
     /// ```
     /// Any standard Range<usize> notation is allowed as the first paramater
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
-    /// u32_prison.push(46);
-    /// assert!(u32_prison.visit_slice(2..5,  |last_three| { }).is_ok());
-    /// assert!(u32_prison.visit_slice(2..=4, |also_last_three| { }).is_ok());
-    /// assert!(u32_prison.visit_slice(2..,   |again_last_three| { }).is_ok());
-    /// assert!(u32_prison.visit_slice(..3,   |first_three| { }).is_ok());
-    /// assert!(u32_prison.visit_slice(..=3,  |first_four| { }).is_ok());
-    /// assert!(u32_prison.visit_slice(..,    |all| { }).is_ok());
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.insert(46)?;
+    /// assert!(u32_prison.visit_slice(2..5,  |last_three| Ok(())).is_ok());
+    /// assert!(u32_prison.visit_slice(2..=4, |also_last_three| Ok(())).is_ok());
+    /// assert!(u32_prison.visit_slice(2..,   |again_last_three| Ok(())).is_ok());
+    /// assert!(u32_prison.visit_slice(..3,   |first_three| Ok(())).is_ok());
+    /// assert!(u32_prison.visit_slice(..=3,  |first_four| Ok(())).is_ok());
+    /// assert!(u32_prison.visit_slice(..,    |all| Ok(())).is_ok());
+    /// # Ok(())
     /// # }
     /// ```
-    /// Just like `.visit()`, any particular cell can only be visited once,
+    /// Just like [Prison::visit_many_idx()], any particular cell can only be visited once,
     /// but as long as the cells requested don't overlap you may make nested
     /// `visit()`-family calls
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
     /// u32_prison.visit_slice(..2, |first_half| {
     ///     u32_prison.visit_slice(2.., |second_half| {
     ///         assert_eq!(*first_half[1], 43);
     ///         assert_eq!(*second_half[0], 44);
+    ///         Ok(())
     ///     });
+    ///     Ok(())
     /// });
+    /// # Ok(())
     /// # }
     /// ```
     /// Attempting to visit the same cell twice will fail, returning an
-    /// [AccessError::CellAlreadyBeingVisited(usize)], and attempting to visit an index
-    /// that is out of range returns an [AccessError::IndexOutOfRange(usize)]
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to visit an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to visit a slice with even *one* element free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
     /// ### Example
     /// ```rust
-    /// # use grit_data_prison::single_threaded::Prison;
-    /// # fn main() {
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
     /// let u32_prison: Prison<u32> = Prison::new();
-    /// u32_prison.push(42);
-    /// u32_prison.push(43);
-    /// u32_prison.push(44);
-    /// u32_prison.push(45);
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
     /// u32_prison.visit_slice(.., |all| {
-    ///     assert!(u32_prison.visit_slice(0..1, |second_visit_to_first_idx| {}).is_err());
+    ///     assert!(u32_prison.visit_slice(0..1, |second_visit_to_first_idx| Ok(())).is_err());
+    ///     Ok(())
     /// });
-    /// assert!(u32_prison.visit_slice(0..10, |invalid_idx| {}).is_err());
+    /// assert!(u32_prison.visit_slice(0..10, |invalid_idx| Ok(())).is_err());
+    /// u32_prison.remove_idx(1)?;
+    /// assert!(u32_prison.visit_slice(.., |idx_1_removed| Ok(())).is_err());
+    /// # Ok(())
     /// # }
     /// ```
     pub fn visit_slice<R, F>(&self, range: R, mut operation: F) -> Result<(), AccessError>
     where
     R: RangeBounds<usize>,
     F:  FnMut(&mut[&mut T]) -> Result<(), AccessError> {
-        let (start, end) = extract_true_start_end(range, self.len());
+        let (start, end) = extract_true_start_end(range, self.vec_len());
         let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
         self.visit_many_internal(&keys, false, |_, vals| operation(vals))
     }
@@ -582,14 +701,45 @@ impl<T> Prison<T> {
 /**************************
  * INTERNAL IMPLEMENTATIONS
  **************************/
-macro_rules! internal {
-    ($p:ident) => {
-        unsafe {&mut *$p.internal.get()}
-    };
-}
+// macro_rules! internal {
+//     ($p:ident) => {
+//         unsafe {&mut *$p.internal.get()}
+//     };
+// }
 
 const NO_FREE: usize = usize::MAX;
 const MAX_CAP: usize = isize::MAX as usize;
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct PrisonInternal<T> {
+    visit_count: usize,
+    gen: usize,
+    free: usize,
+    next_free: usize,
+    vec: Vec<CellOrFree<T>>
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct PrisonCellInternal<T> {
+    locked: bool,
+    gen: usize,
+    val: T,
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+enum CellOrFree<T> {
+    Cell(PrisonCellInternal<T>),
+    Free(FreeCell)
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+struct FreeCell {
+    next_free_idx: usize, 
+}
 
 impl<T> Prison<T> {
     #[doc(hidden)]
@@ -631,6 +781,7 @@ impl<T> Prison<T> {
             },
             CellOrFree::Free(free) => {
                 internal.next_free = free.next_free_idx;
+                internal.free -= 1;
                 CellOrFree::Cell(PrisonCellInternal { locked: false, gen: internal.gen, val })
             },
         };
@@ -659,6 +810,7 @@ impl<T> Prison<T> {
             _ => return Err(AccessError::ValueDeleted(idx, gen)),
         };
         internal.next_free = idx;
+        internal.free += 1;
         let old_cell = mem::replace(&mut internal.vec[idx], new_free);
         return if let CellOrFree::Cell(cell) = old_cell {
             Ok(cell.val)
@@ -735,12 +887,38 @@ impl<T> Prison<T> {
     }
 }
 
+/**************************
+ *        TESTING
+ **************************/
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[derive(Debug, Eq, PartialEq)]
     struct MyNoCopy(usize);
+
+    #[allow(dead_code)]
+    struct SizeEmptyPrisonCell(CellOrFree<()>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct SizeU8PrisonCell(CellOrFree<u8>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct SizeU16PrisonCell(CellOrFree<u16>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct Size3BPrisonCell(CellOrFree<(u8, u8, u8)>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct SizeU32PrisonCell(CellOrFree<u32>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct Size5BPrisonCell(CellOrFree<(u8, u8, u8, u8, u8)>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct Size6BPrisonCell(CellOrFree<(u8, u8, u8, u8, u8, u8)>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct Size7BPrisonCell(CellOrFree<(u8, u8, u8, u8, u8, u8, u8)>); // Size 16, Align 8
+    #[allow(dead_code)]
+    struct SizeU64PrisonCell(CellOrFree<u64>); // Size 24, Align 8
+    #[allow(dead_code)]
+    struct SizeU128PrisonCell(CellOrFree<u128>); // Size 32, Align 8
+    
 
     #[test]
     fn insert_internal() {
@@ -788,6 +966,7 @@ mod tests {
             };
             assert_eq!(internal!(prison).gen, 2);
             internal!(prison).vec[1] = CellOrFree::Free(FreeCell { next_free_idx: NO_FREE });
+            internal!(prison).free = 1;
             internal!(prison).next_free = 1;
             match prison.insert_internal(0, false, false, MyNoCopy(111)) {
                 Ok(key) if (key.idx == 1 && key.gen == 2) => {},
