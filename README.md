@@ -1,11 +1,15 @@
-This crate provides the struct [Prison<T>](crate::single_threaded::Prison), an arena data structure 
+This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure 
 that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
 that take closures that are passed mutable references to the values.
 
 This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its methods differ from
 those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
 
-## Quick Look
+[On: Crates.io](https://crates.io/crates/grit-data-prison)  
+[On: Github](https://github.com/gabe-lee/grit-data-prison)  
+[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.0/grit_data_prison/)  
+
+### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
 - Acts primarily as a Generational Arena, where each element is accessed using a [CellKey] that differentiates two values that may have been located at the same index but represent fundamentally separate data
 - Can *also* be indexed with a plain [usize] for simple use cases
@@ -14,7 +18,7 @@ those found on a [Vec], how to use its unusual `.visit()` methods, and how it ac
 - [CellKey] uses a [usize] index and [usize] generation to match an index to the context in which it was created and prevent two unrelated values that both at some point lived at the same index from being mistaken as equal
 - All methods return an [AccessError] where the scenario would cause a panic if not caught
  
-## NOTE
+### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
 See [changelog](#changelog)
 
