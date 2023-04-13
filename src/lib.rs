@@ -16,7 +16,7 @@ those found on a [Vec], how to use its unusual `.visit()` methods, and how it ac
  
 ## NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
-See [changelog](#Changelog)
+See [changelog](#changelog)
 
 # Motivation
  
@@ -65,8 +65,8 @@ to your data from within a closure
 # let key_hello = prison.insert(String::from("Hello, "))?;
 # prison.insert(String::from("World!"))?;
 prison.visit_idx(1, |val_at_idx_1| {
-       *val_at_idx_1 = String::from("Rust!!");
-       Ok(())
+    *val_at_idx_1 = String::from("Rust!!");
+    Ok(())
 });
 # Ok(())
 # }
@@ -80,8 +80,8 @@ or by using one of the batch `.visit()` methods
 # let key_hello = prison.insert(String::from("Hello, "))?;
 # prison.insert(String::from("World!"))?;
 # prison.visit_idx(1, |val_at_idx_1| {
-#        *val_at_idx_1 = String::from("Rust!!");
-#        Ok(())
+#   *val_at_idx_1 = String::from("Rust!!");
+#   Ok(())
 # });
 prison.visit(key_hello, |val_0| {
     prison.visit_idx(1, |val_1| {
@@ -165,6 +165,7 @@ I welcome any feedback and analysis showing otherwise so I can fix it or revise 
 - Because we are only allowing one reference, that one reference will always be a mutable reference
 - Any method that would or *could* read, modify, or delete any element cannot be performed while that element is currently being visited
 - Any method that would or *could* cause the underlying [Vec] to relocate to a different spot in memory cannot be performed while even ONE visit is in progress
+
 In addition, it provides the functionality of a Generational Arena with these additional rules:
 - The [Prison](crate::single_threaded::Prison) has a master generation counter to track the largest generation of any element inside it
 - Every valid element has a generation attatched to it, and `insert()` operations return a [CellKey] that pairs the element index with the current largest generation value
@@ -175,11 +176,11 @@ It achieves all of the above with a few lightweight sentinel values:
 - A master `visit_count` [usize] on [Prison](crate::single_threaded::Prison) itself to track whether *any* visit is in progress
 - A master `generation` [usize] on [Prison](crate::single_threaded::Prison) itself to track largest generation
 - Each element is either a `Cell` or `Free` variant: 
-- - A `Free` Simply contains the value of the *next* free index after this one is filled
-- - A `locked` [bool] on each `Cell` that prevents getting 2 mutable references to the same element
-- - A `generation` [usize] on each `Cell` to use when matching to the [CellKey] used to access the index
+    - A `Free` Simply contains the value of the *next* free index after this one is filled
+    - A `locked` [bool] on each `Cell` that prevents getting 2 mutable references to the same element
+    - A `generation` [usize] on each `Cell` to use when matching to the [CellKey] used to access the index
 
-(see [performance](#Performance) for more info on specifics)
+(see [performance](#performance) for more info on specifics)
 
 Attempting to perform an action that would violate any of these rules will either be prevented from compiling
 or return an [AccessError] that describes why it was an error, and should never panic.
@@ -234,10 +235,13 @@ fn main() -> Result<(), AccessError> {
 [Prison<T>](crate::single_threaded::Prison) has 4 [usize] house-keeping values in addition to a [Vec<CellOrFree<T>>]
 
 Each element in [Vec<CellOrFree<T>>] is Either a `Cell` variant or `Free` variant, so the marker is only a [u8]
-`Free` variant only contains a single [usize], so it is not the limiting variant
-`Cell` variant contains a [usize] generation counter, [bool] access lock, and a value of type `T`
+- `Free` variant only contains a single [usize], so it is not the limiting variant
+- `Cell` variant contains a [usize] generation counter, [bool] access lock, and a value of type `T`
 
-Therefore the total additional size compared to a [Vec<T>], per element, is 16 bytes
+Therefore the total _additional_ size compared to a [Vec<T>] on a 64-bit system is
+(at worst due to alignment):
+
+32 bytes flat + 16 bytes per element
 
 # How this crate may change in the future
  
