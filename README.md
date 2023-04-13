@@ -2,6 +2,9 @@
 This crate provides the generic type `Prison<T>`, a data structure that uses an underlying `Vec<T>` to store values of the same type, but allows simultaneous interior mutability to each and every  value by providing `.visit()` methods that take closures that are passed mutable references to the values.
 
 This documentation describes the usage of `Prison<T>`, how its `Vec` analogous methods differ from those found on a `Vec`, how to use its unusual `.visit()` methods, and how it achieves memory safety.
+
+## NOTE
+Version 0.2.0 has a different API than version 0.1.2 and is a move from a plain Vec to a Generational Arena
 # Motivation
 I wanted a data structure that met these criteria:
 - Backed by a `Vec<T>` (or similar) for cache efficiency

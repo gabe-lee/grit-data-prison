@@ -5,6 +5,10 @@
  This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its [Vec] analogous methods differ from
  those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
  
+ ## NOTE
+ This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
+ - Version 0.2.0 has a different API than version 0.1.2 and is a move from a plain Vec to a Generational Arena
+
  # Motivation
  
  I wanted a data structure that met these criteria:
@@ -234,36 +238,43 @@ pub mod single_threaded;
 /// [std::fmt::Debug] traits, with the `Display` version giving a short description of the problem,
 /// and the `Debug` version giving a more in-depth explaination of exactly why an error had to be
 /// returned
+#[derive(PartialEq, Eq)]
 pub enum AccessError {
     /// Indicates that an operation attempted to access an index beyond the range of the [Prison<T>],
     /// along with the offending index
     IndexOutOfRange(usize),
     /// Indicates that an operation attempted to access an index already being accessed by another operation,
     /// along with the index in question
-    CellAlreadyBeingVisited(usize),
+    IndexAlreadyBeingVisited(usize),
     /// Indicates that an insert would require re-allocation of the internal [Vec<T>], thereby invalidating
     /// any current visits
     InsertAtMaxCapacityWhileVisiting,
     /// Indicates that the last element in the [Prison<T>](crate::single_threaded::Prison) is being accessed, and `pop()`-ing the value out
     /// of the underlying [Vec<T>] would invalidate the reference
-    RemoveWhileCellBeingVisited(usize),
+    RemoveWhileIndexBeingVisited(usize),
     /// Indicates that the value requested was deleted and a new value with an updated generation took its place
     /// 
     /// Contains the index and generation from the invalid CellKey, in that order
     ValueDeleted(usize, usize),
     /// Indicates that a very large number of removes and inserts caused the generation counter to reach its max value
     MaxValueForGenerationReached,
+    /// Indicates that an attempted insert to a specific index would overwrite and invalidate a value still in use
+    IndexIsNotFree(usize),
+    /// Indicates that the underlying [Vec] reached the maximum capacity set by Rust ([isize::MAX])
+    MaximumCapacityReached
 }
 
 impl Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
-            Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited", idx),
+            Self::IndexAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited", idx),
             Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity, cannot push() new value while visiting"),
             Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted", idx, gen),
             Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached"),
-            Self::RemoveWhileCellBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove", idx),
+            Self::RemoveWhileIndexBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove", idx),
+            Self::IndexIsNotFree(idx) => write!(f, "Index [{}] is not free and may be still in use, cannot overwrite", idx),
+            Self::MaximumCapacityReached => write!(f, "Prison has reached the maximum capacity allowed by Rust"),
         }
     }
 }
@@ -272,11 +283,13 @@ impl Debug for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
-            Self::CellAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited\n---------\nVisiting the same cell twice would give two mutable references to the same memory. You could potentially alter some expected pre-condition the compiler expects of the value, such as changing an Enum's Variant or deleting all the items from a Vector expected to have a non-zero length.", idx),
+            Self::IndexAlreadyBeingVisited(idx) => write!(f, "Cell at index [{}] is already being visited\n---------\nVisiting the same cell twice would give two mutable references to the same memory. You could potentially alter some expected pre-condition the compiler expects of the value, such as changing an Enum's Variant or deleting all the items from a Vector expected to have a non-zero length.", idx),
             Self::InsertAtMaxCapacityWhileVisiting => write!(f, "Prison is at max capacity\n---------\nPushing to a Vec at max capacity while a visit is in progress may cause re-allocation that will invalidate value references"),
             Self::ValueDeleted(idx, gen) => write!(f, "Value requested at index {} gen {} was already deleted\n---------\nWhen deleting a value, it is recomended you take steps to invalidate any held keys refering to it", idx, gen),
             Self::MaxValueForGenerationReached => write!(f, "Maximum value for generation counter reached\n---------\nA large number of removals and inserts has caused the generation counter to reach its max value. Manually perform a Prison::purge() and re-issue the keys to continue using this Prison"),
-            Self::RemoveWhileCellBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove\n---------\nRemoving a value with an active mutable reference in scope will overwrite the memory at that location and invalidate the reference", idx),
+            Self::RemoveWhileIndexBeingVisited(idx) => write!(f, "Index [{}] is currently being visited, cannot remove\n---------\nRemoving a value with an active mutable reference in scope will overwrite the memory at that location and invalidate the reference", idx),
+            Self::IndexIsNotFree(idx) => write!(f, "Index [{}] is not free and may be still in use, cannot overwrite\n---------\nWriting a new value to this index will cause any keys referencing the old value to return errors. If this is truly the behavior you want, use Prison::overwrite() instead of Prison::insert()", idx),
+            Self::MaximumCapacityReached => write!(f, "Prison has reached the maximum capacity allowed by Rust\n---------\nRust does not allow a [Vec] to have a capacity longer than [isize::MAX] becuase most operating systems only allow half of the total memory space to be addressed by programs"),
         }
     }
 }
