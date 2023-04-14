@@ -519,7 +519,7 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn visit_many<F>(&self, keys: &[CellKey], mut operation: F) -> Result<(), AccessError> 
-    where F: FnMut(&mut[&mut T]) -> Result<(), AccessError> {
+    where F: FnMut(&[&mut T]) -> Result<(), AccessError> {
         self.visit_many_internal(keys, true, |_, vals| operation(vals))
     }
 
@@ -591,7 +591,7 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     pub fn visit_many_idx<F>(&self, indexes: &[usize], mut operation: F) -> Result<(), AccessError> 
-    where F: FnMut(&mut[&mut T]) -> Result<(), AccessError> {
+    where F: FnMut(&[&mut T]) -> Result<(), AccessError> {
         let keys: Vec<CellKey> = indexes.iter().map(|idx| CellKey{ idx: *idx, gen: 0}).collect();
         self.visit_many_internal(&keys, false, |_, vals| operation(vals))
     }
@@ -690,7 +690,7 @@ impl<T> Prison<T> {
     pub fn visit_slice<R, F>(&self, range: R, mut operation: F) -> Result<(), AccessError>
     where
     R: RangeBounds<usize>,
-    F:  FnMut(&mut[&mut T]) -> Result<(), AccessError> {
+    F:  FnMut(&[&mut T]) -> Result<(), AccessError> {
         let (start, end) = extract_true_start_end(range, self.vec_len());
         let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
         self.visit_many_internal(&keys, false, |_, vals| operation(vals))
@@ -820,8 +820,7 @@ impl<T> Prison<T> {
     }
 
     #[doc(hidden)]
-    fn visit_one_internal<FF>(&self, idx: usize, gen: usize, use_gen: bool, mut ff: FF) -> Result<(), AccessError>
-    where FF: FnMut(usize, &mut T) -> Result<(), AccessError> {
+    fn lock_one_internal(&self, idx: usize, gen: usize, use_gen: bool) -> Result<(&mut PrisonCellInternal<T>, &mut usize), AccessError> {
         let internal = internal!(self);
         if idx >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(idx));
@@ -833,21 +832,14 @@ impl<T> Prison<T> {
                 }
                 internal.visit_count += 1;
                 cell.locked = true;
-                let res = ff(idx, &mut cell.val);
-                cell.locked = false;
-                internal.visit_count -= 1;
-                return res;
+                return Ok((cell, &mut internal.visit_count))
             },
             _ => return Err(AccessError::ValueDeleted(idx, gen)),
         }
     }
 
     #[doc(hidden)]
-    fn visit_many_internal<FF>(&self, cell_keys: &[CellKey], use_gens: bool, mut ff: FF) -> Result<(), AccessError>
-    where FF: FnMut(&[usize], &mut[&mut T]) -> Result<(), AccessError> {
-        if cell_keys.len() == 0 {
-            return Ok(());
-        }
+    fn lock_many_internal(&self, cell_keys: &[CellKey], use_gens: bool) -> Result<(Vec<&mut bool>, Vec<usize>, Vec<&mut T>, &mut usize), AccessError> {
         let internal = internal!(self);
         let mut vals = Vec::new();
         let mut indices = Vec::new();
@@ -875,16 +867,51 @@ impl<T> Prison<T> {
                 },
             }
         }
-        if ret_value.is_ok() {
-            internal.visit_count += 1;
-            ret_value = ff(&indices, vals.as_mut_slice());
-            internal.visit_count -= 1;
+        internal.visit_count += 1;
+        match ret_value {
+            Ok(_) => {
+                return Ok((locks, indices, vals, &mut internal.visit_count));
+            },
+            Err(acc_err) => {
+                prison_unlock_many_internal(locks, &mut internal.visit_count);
+                return Err(acc_err);
+            },
         }
-        for lock in locks {
-            *lock = false;
-        }
-        return ret_value;
     }
+
+    #[doc(hidden)]
+    fn visit_one_internal<FF>(&self, idx: usize, gen: usize, use_gen: bool, mut ff: FF) -> Result<(), AccessError>
+    where FF: FnMut(usize, &mut T) -> Result<(), AccessError> {
+        let (cell, visits) = self.lock_one_internal(idx, gen, use_gen)?;
+        let res = ff(idx, &mut cell.val);
+        prison_unlock_one_internal(&mut cell.locked, visits);
+        return res;
+    }
+
+    #[doc(hidden)]
+    fn visit_many_internal<FF>(&self, cell_keys: &[CellKey], use_gens: bool, mut ff: FF) -> Result<(), AccessError>
+    where FF: FnMut(&[usize], &[&mut T]) -> Result<(), AccessError> {
+        let (locks, indices, vals, visits) = self.lock_many_internal(cell_keys, use_gens)?;
+        let result = ff(&indices, &vals);
+        prison_unlock_many_internal(locks, visits);
+        return result;
+    }
+}
+
+#[doc(hidden)]
+#[inline(always)]
+fn prison_unlock_one_internal(lock: &mut bool, visits: &mut usize) {
+    *lock = false;
+    *visits -= 1;
+}
+
+#[doc(hidden)]
+#[inline(always)]
+fn prison_unlock_many_internal(locks: Vec<&mut bool>, visits: &mut usize) {
+    for lock in locks {
+        *lock = false;
+    }
+    *visits -= 1;
 }
 
 /**************************
