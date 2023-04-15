@@ -1,9 +1,8 @@
-use std::ops::{Index, IndexMut};
 #[cfg(not(feature = "no_std"))]
-use std::{ops::{RangeBounds, Deref, DerefMut}, cell::UnsafeCell, mem};
+use std::{ops::{RangeBounds, Deref, DerefMut, Index, IndexMut}, cell::UnsafeCell, mem};
 
 #[cfg(feature = "no_std")]
-use core::{ops::{RangeBounds, Deref, DerefMut}, cell::UnsafeCell, mem};
+use core::{ops::{RangeBounds, Deref, DerefMut, Index, IndexMut}, cell::UnsafeCell, mem};
 
 use crate::{AccessError, CellKey, extract_true_start_end};
 
@@ -621,7 +620,9 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    /// Any standard Range<usize> notation is allowed as the first paramater
+    /// Any standard [Range<usize>](std::ops::Range) notation is allowed as the first paramater,
+    /// but care must be taken because it is not guaranteed every index within range is a valid
+    /// value or is not being accessed by any other method
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
@@ -638,6 +639,8 @@ impl<T> Prison<T> {
     /// assert!(u32_prison.visit_slice(..3,   |first_three| Ok(())).is_ok());
     /// assert!(u32_prison.visit_slice(..=3,  |first_four| Ok(())).is_ok());
     /// assert!(u32_prison.visit_slice(..,    |all| Ok(())).is_ok());
+    /// u32_prison.remove_idx(2)?;
+    /// assert!(u32_prison.visit_slice(..,    |all| Ok(())).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -697,24 +700,296 @@ impl<T> Prison<T> {
         self.visit_many_internal(&keys, false, |_, vals| operation(vals))
     }
 
-    /// todo
+    /// Return an [EscortedValue] that locks the element and wraps it in guarding data that automatically
+    /// unlocks it when it goes out of range.
+    /// 
+    /// Data within an [EscortedValue] can be accessed and mutated by dereferencing it. As long as the [EscortedValue]
+    /// remains in scope, the element where it's value resides in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedValue] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let mut esc_0 = prison.escort(key_0)?;
+    /// assert_eq!(*esc_0, 10);
+    /// *esc_0 = 20;
+    /// esc_0.unescort();
+    /// prison.visit(key_0, |val_0| {
+    ///     assert_eq!(*val_0, 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same cell twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort a value that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::with_capacity(2);
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1_a = prison.insert(20)?;
+    /// let key_out_of_bounds = CellKey::from_raw_parts(10, 0);
+    /// prison.remove(key_1_a)?;
+    /// let key_1_b = prison.insert(30)?;
+    /// let mut esc_0 = prison.escort(key_0)?;
+    /// assert!(prison.escort(key_0).is_err());
+    /// assert!(prison.escort(key_out_of_bounds).is_err());
+    /// assert!(prison.escort(key_1_a).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn escort<'a>(&'a self, key: CellKey) -> Result<EscortedValue<'a, T>, AccessError> {
         return self.escort_internal(key.idx, key.gen, true)
     }
 
-    /// todo
+    /// Return an [EscortedValue] that locks the element and wraps it in guarding data that automatically
+    /// unlocks it when it goes out of range.
+    /// 
+    /// Similar to [Prison::escort()], but ignores the generation counter
+    /// 
+    /// Data within an [EscortedValue] can be accessed and mutated by dereferencing it. As long as the [EscortedValue]
+    /// remains in scope, the element where it's value resides in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedValue] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// let mut esc_0 = prison.escort_idx(0)?;
+    /// assert_eq!(*esc_0, 10);
+    /// *esc_0 = 20;
+    /// esc_0.unescort();
+    /// prison.visit_idx(0, |val_0| {
+    ///     assert_eq!(*val_0, 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same cell twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort a value that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::with_capacity(2);
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.remove_idx(1)?;
+    /// let mut esc_0 = prison.escort_idx(0)?;
+    /// assert!(prison.escort_idx(0).is_err());
+    /// assert!(prison.escort_idx(10).is_err());
+    /// assert!(prison.escort_idx(1).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn escort_idx<'a>(&'a self, idx: usize) -> Result<EscortedValue<'a, T>, AccessError> {
         return self.escort_internal(idx, 0, false)
     }
 
-    /// todo
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1 = prison.insert(20)?;
+    /// let key_2 = prison.insert(30)?;
+    /// let mut esc_0_1_2 = prison.escort_many(&[key_0, key_1, key_2])?;
+    /// assert_eq!(esc_0_1_2[0], 10);
+    /// esc_0_1_2[0] = 20;
+    /// esc_0_1_2.unescort();
+    /// prison.visit_many(&[key_0, key_1, key_2], |vals_0_1_2| {
+    ///     assert_eq!(*vals_0_1_2[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1 = prison.insert(20)?;
+    /// let key_2 = prison.insert(30)?;
+    /// let key_4_a = prison.insert(40)?;
+    /// prison.remove(key_4_a)?;
+    /// let key_4_b = prison.insert(44)?;
+    /// let key_out_of_bounds = CellKey::from_raw_parts(10, 1);
+    /// let mut esc_0_1_2 = prison.escort_many(&[key_0, key_1, key_2])?;
+    /// assert!(prison.escort_many(&[key_0, key_1, key_2, key_4_b]).is_err());
+    /// assert!(prison.escort_many(&[key_out_of_bounds]).is_err());
+    /// assert!(prison.escort_many(&[key_4_a]).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn escort_many<'a>(&'a self, keys: &[CellKey]) -> Result<EscortedSlice<'a, T>, AccessError> {
         return self.escort_many_internal(keys, true)
     }
 
-    /// todo
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Similar to [Prison::escort_many()] but disregards the generation counter
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// let mut esc_0_1_2 = prison.escort_many_idx(&[0, 1, 2])?;
+    /// assert_eq!(esc_0_1_2[0], 10);
+    /// esc_0_1_2[0] = 20;
+    /// esc_0_1_2.unescort();
+    /// prison.visit_many_idx(&[0, 1, 2], |vals_0_1_2| {
+    ///     assert_eq!(*vals_0_1_2[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// prison.insert(40)?;
+    /// prison.remove_idx(3)?;
+    /// let mut esc_0_1_2 = prison.escort_many_idx(&[0, 1, 2])?;
+    /// assert!(prison.escort_many_idx(&[0, 1, 2]).is_err());
+    /// assert!(prison.escort_many_idx(&[10]).is_err());
+    /// assert!(prison.escort_many_idx(&[3]).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn escort_many_idx<'a>(&'a self, indexes: &[usize]) -> Result<EscortedSlice<'a, T>, AccessError> {
         let keys: Vec<CellKey> = indexes.iter().map(|idx| CellKey{ idx: *idx, gen: 0}).collect();
+        return self.escort_many_internal(&keys, false)
+    }
+
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Internally this is identical to calling [Prison::escort_many_idx()] with a list of consecutive
+    /// indexes.
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// let mut esc_all = prison.escort_slice(..)?;
+    /// assert_eq!(esc_all[0], 10);
+    /// esc_all[0] = 20;
+    /// esc_all.unescort();
+    /// prison.visit_slice(.., |all_vals| {
+    ///     assert_eq!(*all_vals[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Any standard [Range<usize>](std::ops::Range) notation is allowed,
+    /// but care must be taken because it is not guaranteed every index within range is a valid
+    /// value or is not being accessed by any other method
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let u32_prison: Prison<u32> = Prison::new();
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.insert(46)?;
+    /// let mut esc = u32_prison.escort_slice(2..5)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(2..=4)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(2..)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..3)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..=3)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..)?;
+    /// esc.unescort();
+    /// u32_prison.remove_idx(2)?;
+    /// assert!(u32_prison.escort_slice(..).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// prison.insert(40)?;
+    /// prison.insert(50)?;
+    /// let esc_first_two = prison.escort_slice(0..2)?;
+    /// assert!(prison.escort_slice(0..3).is_err());
+    /// assert!(prison.escort_slice(2..10).is_err());
+    /// prison.remove_idx(3)?;
+    /// assert!(prison.escort_slice(..).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort_slice<'a, R>(&'a self, range: R) -> Result<EscortedSlice<'a, T>, AccessError>
+    where R: RangeBounds<usize> {
+        let (start, end) = extract_true_start_end(range, self.vec_len());
+        let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
         return self.escort_many_internal(&keys, false)
     }
 }
@@ -729,7 +1004,7 @@ impl<T> Prison<T> {
 /// 
 /// You may also manually return the value to the [Prison] calling `unescort()` on it
 /// 
-/// You can obtain a [EscortedValue] by calling `escort()` on a [Prison], and accessing the
+/// You can obtain a [EscortedValue] by calling `escort()` or `escort_idx()` on a [Prison], and accessing the
 /// value it wraps is a simple matter of dereferencing it
 /// ### Example
 /// ```rust

@@ -400,7 +400,7 @@ impl CellKey {
         return CellKey { idx, gen };
     }
 
-    /// Return the internal index and generation from the cell key
+    /// Return the internal index and generation from the cell key, in that order
     /// 
     /// Not recomended in most cases. If you need just the index by itself,
     /// use [CellKey::idx()] instead
