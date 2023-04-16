@@ -18,7 +18,7 @@ those found on a [Vec], how to use its unusual `.visit()` methods, and how it ac
 - Uses [bool] locks on each element and a master [usize] counter to track the number/location of active references and prevent mutable reference aliasing and disallow scenarios that could invalidate existing references
 - [CellKey] uses a [usize] index and [usize] generation to match an index to the context in which it was created and prevent two unrelated values that both at some point lived at the same index from being mistaken as equal
 - All methods return an [AccessError] where the scenario would cause a panic if not caught
- 
+
 ### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
 See [changelog](#changelog)
@@ -367,6 +367,7 @@ that the provided mutable references can be made to point to invalid/illegal mem
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
 # Changelog
+ - Version 0.2.2: Non-Breaking update to [EscortedValue](crate::single_threaded::EscortedValue) and [EscortedSlice](crate::single_threaded::EscortedSlice) to reduce their memory footprint
  - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
  - Version 0.2.x: has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
  - Version 0.1.x: first version, plain old [Vec] with [usize] indexing
