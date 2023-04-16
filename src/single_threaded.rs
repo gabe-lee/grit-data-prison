@@ -1,8 +1,8 @@
 #[cfg(not(feature = "no_std"))]
-use std::{ops::RangeBounds, cell::UnsafeCell, mem};
+use std::{ops::{RangeBounds, Deref, DerefMut, Index, IndexMut}, cell::UnsafeCell, mem};
 
 #[cfg(feature = "no_std")]
-use core::{ops::RangeBounds, cell::UnsafeCell, mem};
+use core::{ops::{RangeBounds, Deref, DerefMut, Index, IndexMut}, cell::UnsafeCell, mem};
 
 use crate::{AccessError, CellKey, extract_true_start_end};
 
@@ -383,9 +383,9 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     #[inline(always)]
-    pub fn visit<F>(&self, key: CellKey, mut operation: F) -> Result<(), AccessError>
+    pub fn visit<F>(&self, key: CellKey, operation: F) -> Result<(), AccessError>
     where F: FnMut(&mut T) -> Result<(), AccessError> {
-        self.visit_one_internal(key.idx, key.gen, true, |_, val| operation(val))
+        self.visit_one_internal(key.idx, key.gen, true, operation)
     }
 
     /// Visit a single value in the [Prison], obtaining a mutable reference to the 
@@ -447,9 +447,9 @@ impl<T> Prison<T> {
     /// # }
     /// ```
     #[inline(always)]
-    pub fn visit_idx<F>(&self, idx: usize, mut operation: F) -> Result<(), AccessError>
+    pub fn visit_idx<F>(&self, idx: usize, operation: F) -> Result<(), AccessError>
     where F: FnMut(&mut T) -> Result<(), AccessError> {
-        self.visit_one_internal(idx, 0, false, |_, val| operation(val))
+        self.visit_one_internal(idx, 0, false, operation)
     }
 
     /// Visit many values in the [Prison] at the same time, obtaining a mutable reference
@@ -518,9 +518,9 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn visit_many<F>(&self, keys: &[CellKey], mut operation: F) -> Result<(), AccessError> 
+    pub fn visit_many<F>(&self, keys: &[CellKey], operation: F) -> Result<(), AccessError> 
     where F: FnMut(&[&mut T]) -> Result<(), AccessError> {
-        self.visit_many_internal(keys, true, |_, vals| operation(vals))
+        self.visit_many_internal(keys, true, operation)
     }
 
     /// Visit many values in the [Prison] at the same time, obtaining a mutable reference
@@ -590,10 +590,10 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn visit_many_idx<F>(&self, indexes: &[usize], mut operation: F) -> Result<(), AccessError> 
+    pub fn visit_many_idx<F>(&self, indexes: &[usize], operation: F) -> Result<(), AccessError> 
     where F: FnMut(&[&mut T]) -> Result<(), AccessError> {
         let keys: Vec<CellKey> = indexes.iter().map(|idx| CellKey{ idx: *idx, gen: 0}).collect();
-        self.visit_many_internal(&keys, false, |_, vals| operation(vals))
+        self.visit_many_internal(&keys, false, operation)
     }
 
     /// Visit a slice of values in the [Prison] at the same time, obtaining a mutable reference
@@ -620,7 +620,9 @@ impl<T> Prison<T> {
     /// # Ok(())
     /// # }
     /// ```
-    /// Any standard Range<usize> notation is allowed as the first paramater
+    /// Any standard [Range<usize>](std::ops::Range) notation is allowed as the first paramater,
+    /// but care must be taken because it is not guaranteed every index within range is a valid
+    /// value or is not being accessed by any other method
     /// ### Example
     /// ```rust
     /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
@@ -637,6 +639,8 @@ impl<T> Prison<T> {
     /// assert!(u32_prison.visit_slice(..3,   |first_three| Ok(())).is_ok());
     /// assert!(u32_prison.visit_slice(..=3,  |first_four| Ok(())).is_ok());
     /// assert!(u32_prison.visit_slice(..,    |all| Ok(())).is_ok());
+    /// u32_prison.remove_idx(2)?;
+    /// assert!(u32_prison.visit_slice(..,    |all| Ok(())).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -693,19 +697,478 @@ impl<T> Prison<T> {
     F:  FnMut(&[&mut T]) -> Result<(), AccessError> {
         let (start, end) = extract_true_start_end(range, self.vec_len());
         let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
-        self.visit_many_internal(&keys, false, |_, vals| operation(vals))
+        self.visit_many_internal(&keys, false, |vals| operation(vals))
+    }
+
+    /// Return an [EscortedValue] that locks the element and wraps it in guarding data that automatically
+    /// unlocks it when it goes out of range.
+    /// 
+    /// Data within an [EscortedValue] can be accessed and mutated by dereferencing it. As long as the [EscortedValue]
+    /// remains in scope, the element where it's value resides in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedValue] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let mut esc_0 = prison.escort(key_0)?;
+    /// assert_eq!(*esc_0, 10);
+    /// *esc_0 = 20;
+    /// esc_0.unescort();
+    /// prison.visit(key_0, |val_0| {
+    ///     assert_eq!(*val_0, 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same cell twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort a value that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::with_capacity(2);
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1_a = prison.insert(20)?;
+    /// let key_out_of_bounds = CellKey::from_raw_parts(10, 0);
+    /// prison.remove(key_1_a)?;
+    /// let key_1_b = prison.insert(30)?;
+    /// let mut esc_0 = prison.escort(key_0)?;
+    /// assert!(prison.escort(key_0).is_err());
+    /// assert!(prison.escort(key_out_of_bounds).is_err());
+    /// assert!(prison.escort(key_1_a).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort<'a>(&'a self, key: CellKey) -> Result<EscortedValue<'a, T>, AccessError> {
+        return self.escort_internal(key.idx, key.gen, true)
+    }
+
+    /// Return an [EscortedValue] that locks the element and wraps it in guarding data that automatically
+    /// unlocks it when it goes out of range.
+    /// 
+    /// Similar to [Prison::escort()], but ignores the generation counter
+    /// 
+    /// Data within an [EscortedValue] can be accessed and mutated by dereferencing it. As long as the [EscortedValue]
+    /// remains in scope, the element where it's value resides in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedValue] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// let mut esc_0 = prison.escort_idx(0)?;
+    /// assert_eq!(*esc_0, 10);
+    /// *esc_0 = 20;
+    /// esc_0.unescort();
+    /// prison.visit_idx(0, |val_0| {
+    ///     assert_eq!(*val_0, 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same cell twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an index
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort a value that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::with_capacity(2);
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.remove_idx(1)?;
+    /// let mut esc_0 = prison.escort_idx(0)?;
+    /// assert!(prison.escort_idx(0).is_err());
+    /// assert!(prison.escort_idx(10).is_err());
+    /// assert!(prison.escort_idx(1).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort_idx<'a>(&'a self, idx: usize) -> Result<EscortedValue<'a, T>, AccessError> {
+        return self.escort_internal(idx, 0, false)
+    }
+
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1 = prison.insert(20)?;
+    /// let key_2 = prison.insert(30)?;
+    /// let mut esc_0_1_2 = prison.escort_many(&[key_0, key_1, key_2])?;
+    /// assert_eq!(esc_0_1_2[0], 10);
+    /// esc_0_1_2[0] = 20;
+    /// esc_0_1_2.unescort();
+    /// prison.visit_many(&[key_0, key_1, key_2], |vals_0_1_2| {
+    ///     assert_eq!(*vals_0_1_2[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// let key_0 = prison.insert(10)?;
+    /// let key_1 = prison.insert(20)?;
+    /// let key_2 = prison.insert(30)?;
+    /// let key_4_a = prison.insert(40)?;
+    /// prison.remove(key_4_a)?;
+    /// let key_4_b = prison.insert(44)?;
+    /// let key_out_of_bounds = CellKey::from_raw_parts(10, 1);
+    /// let mut esc_0_1_2 = prison.escort_many(&[key_0, key_1, key_2])?;
+    /// assert!(prison.escort_many(&[key_0, key_1, key_2, key_4_b]).is_err());
+    /// assert!(prison.escort_many(&[key_out_of_bounds]).is_err());
+    /// assert!(prison.escort_many(&[key_4_a]).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort_many<'a>(&'a self, keys: &[CellKey]) -> Result<EscortedSlice<'a, T>, AccessError> {
+        return self.escort_many_internal(keys, true)
+    }
+
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Similar to [Prison::escort_many()] but disregards the generation counter
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// let mut esc_0_1_2 = prison.escort_many_idx(&[0, 1, 2])?;
+    /// assert_eq!(esc_0_1_2[0], 10);
+    /// esc_0_1_2[0] = 20;
+    /// esc_0_1_2.unescort();
+    /// prison.visit_many_idx(&[0, 1, 2], |vals_0_1_2| {
+    ///     assert_eq!(*vals_0_1_2[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// prison.insert(40)?;
+    /// prison.remove_idx(3)?;
+    /// let mut esc_0_1_2 = prison.escort_many_idx(&[0, 1, 2])?;
+    /// assert!(prison.escort_many_idx(&[0, 1, 2]).is_err());
+    /// assert!(prison.escort_many_idx(&[10]).is_err());
+    /// assert!(prison.escort_many_idx(&[3]).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort_many_idx<'a>(&'a self, indexes: &[usize]) -> Result<EscortedSlice<'a, T>, AccessError> {
+        let keys: Vec<CellKey> = indexes.iter().map(|idx| CellKey{ idx: *idx, gen: 0}).collect();
+        return self.escort_many_internal(&keys, false)
+    }
+
+    /// Return an [EscortedSlice] that locks the elements and wraps them in guarding data that automatically
+    /// unlocks them all when it goes out of range.
+    /// 
+    /// Internally this is identical to calling [Prison::escort_many_idx()] with a list of consecutive
+    /// indexes.
+    /// 
+    /// Data within an [EscortedSlice] can be accessed and mutated by indexing into it. As long as the [EscortedSlice]
+    /// remains in scope, the elements where it's values reside in the [Prison] will remain locked and unable to be accessed.
+    /// You can manually drop the [EscortedSlice] out of scope by calling the `unescort()` method on it
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// let mut esc_all = prison.escort_slice(..)?;
+    /// assert_eq!(esc_all[0], 10);
+    /// esc_all[0] = 20;
+    /// esc_all.unescort();
+    /// prison.visit_slice(.., |all_vals| {
+    ///     assert_eq!(*all_vals[0], 20);
+    ///     Ok(())
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Any standard [Range<usize>](std::ops::Range) notation is allowed,
+    /// but care must be taken because it is not guaranteed every index within range is a valid
+    /// value or is not being accessed by any other method
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let u32_prison: Prison<u32> = Prison::new();
+    /// u32_prison.insert(42)?;
+    /// u32_prison.insert(43)?;
+    /// u32_prison.insert(44)?;
+    /// u32_prison.insert(45)?;
+    /// u32_prison.insert(46)?;
+    /// let mut esc = u32_prison.escort_slice(2..5)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(2..=4)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(2..)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..3)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..=3)?;
+    /// esc.unescort();
+    /// esc = u32_prison.escort_slice(..)?;
+    /// esc.unescort();
+    /// u32_prison.remove_idx(2)?;
+    /// assert!(u32_prison.escort_slice(..).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// Attempting to escort the same element twice will fail, returning an
+    /// [AccessError::IndexAlreadyBeingVisited(idx)], attempting to escort an element
+    /// that is out of range returns an [AccessError::IndexOutOfRange(idx)],
+    /// and attempting to escort an element that was free/deleted
+    /// will return an [AccessError::ValueDeleted(idx, gen)]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// prison.insert(40)?;
+    /// prison.insert(50)?;
+    /// let esc_first_two = prison.escort_slice(0..2)?;
+    /// assert!(prison.escort_slice(0..3).is_err());
+    /// assert!(prison.escort_slice(2..10).is_err());
+    /// prison.remove_idx(3)?;
+    /// assert!(prison.escort_slice(..).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn escort_slice<'a, R>(&'a self, range: R) -> Result<EscortedSlice<'a, T>, AccessError>
+    where R: RangeBounds<usize> {
+        let (start, end) = extract_true_start_end(range, self.vec_len());
+        let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
+        return self.escort_many_internal(&keys, false)
     }
 }
 
+/// Struct representing a value that has been allowed to leave the [Prison] temporarily,
+/// and is escorted by guarding data to prevent it from leaking or never unlocking
+/// 
+/// The element is locked and the [Prison] `visit_count`is incremented when the [EscortedValue] is created,
+/// and it has an implementation of [Drop] that decrements the [Prison] `visit_count` by one and
+/// unlocks the element for further use, meaning the value remains locked *only* as long as its 
+/// [EscortedValue] remains in scope
+/// 
+/// You may also manually return the value to the [Prison] calling `unescort()` on it
+/// 
+/// You can obtain a [EscortedValue] by calling `escort()` or `escort_idx()` on a [Prison], and accessing the
+/// value it wraps is a simple matter of dereferencing it
+/// ### Example
+/// ```rust
+/// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+/// # fn main() -> Result<(), AccessError> {
+/// let prison: Prison<u32> = Prison::new();
+/// let key_0 = prison.insert(10)?;
+/// let mut esc_0 = prison.escort(key_0)?;
+/// assert_eq!(*esc_0, 10);
+/// *esc_0 = 20;
+/// esc_0.unescort();
+/// prison.visit(key_0, |val_0| {
+///     assert_eq!(*val_0, 20);
+///     Ok(())
+/// });
+/// # Ok(())
+/// # }
+/// ```
+pub struct EscortedValue<'a, T> {
+    cell: &'a mut PrisonCellInternal<T>,
+    visits: &'a mut usize,
+}
+
+impl<'a, T> EscortedValue<'a, T> {
+    /// Manually end this value's temporary escorted absence from the [Prison]
+    /// 
+    /// This method simply takes ownership of the [EscortedValue] and immediately lets it go out of scope,
+    /// causing it's `drop()` method to be called and unlocking it's corresponding element in the [Prison]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// let esc_0 = prison.escort_idx(0)?;
+    /// // index 0 CANNOT be accessed here because it is being escorted outside the prison
+    /// assert!(prison.visit_idx(0, |ref_0| Ok(())).is_err());
+    /// esc_0.unescort();
+    /// // index 0 CAN be accessed here because it was returned to the prison
+    /// assert!(prison.visit_idx(0, |ref_0| Ok(())).is_ok());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unescort(self) {}
+}
+
+impl<'a, T> Drop for EscortedValue<'a, T> {
+    fn drop(&mut self) {
+        prison_unlock_one_internal(&mut self.cell.locked, self.visits)
+    }
+}
+
+impl<'a, T> Deref for EscortedValue<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cell.val
+    }
+}
+
+impl<'a, T> DerefMut for EscortedValue<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cell.val
+    }
+}
+
+impl<'a, T> AsRef<T> for EscortedValue<'a, T>
+{
+    fn as_ref(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<'a, T> AsMut<T> for EscortedValue<'a, T>
+{
+    fn as_mut(&mut self) -> &mut T {
+        self.deref_mut()
+    }
+}
+
+/// Struct representing a slice of values that have been allowed to leave the [Prison] temporarily,
+/// and are escorted by guarding data to prevent them from leaking or never unlocking
+/// 
+/// The elements are all locked and the [Prison] `visit_count`is incremented when the [EscortedSlice] is created,
+/// and it has an implementation of [Drop] that decrements the [Prison] `visit_count` by one and
+/// unlocks all the elements for further use, meaning the values remain locked *only* as long as its 
+/// [EscortedSlice] remains in scope
+/// 
+/// You may also manually return the values to the [Prison] calling `unescort()` on it
+/// 
+/// You can obtain a [EscortedSlice] by calling `escort_many()`, `escort_many_idx()` or `escort_slice()`
+/// on a [Prison], and accessing the values it wraps is a simple matter of indexing into it
+/// ### Example
+/// ```rust
+/// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedSlice}};
+/// # fn main() -> Result<(), AccessError> {
+/// let prison: Prison<u32> = Prison::new();
+/// let key_0 = prison.insert(10)?;
+/// let key_1 = prison.insert(20)?;
+/// let key_2 = prison.insert(30)?;
+/// let mut esc_0_1_2 = prison.escort_many(&[key_0, key_1, key_2])?;
+/// assert_eq!(esc_0_1_2[1], 20);
+/// esc_0_1_2[1] = 42;
+/// esc_0_1_2.unescort();
+/// prison.visit(key_1, |val_1| {
+///     assert_eq!(*val_1, 42);
+///     Ok(())
+/// });
+/// # Ok(())
+/// # }
+/// ```
+pub struct EscortedSlice<'a, T> {
+    visits: &'a mut usize,
+    cells: Vec<&'a mut PrisonCellInternal<T>>
+}
+
+impl<'a, T> EscortedSlice<'a, T> {
+    /// Manually end this slice of values' temporary escorted absence from the [Prison]
+    /// 
+    /// This method simply takes ownership of the [EscortedSlice] and immediately lets it go out of scope,
+    /// causing it's `drop()` method to be called and unlocking all it's corresponding elements in the [Prison]
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<u32> = Prison::new();
+    /// prison.insert(10)?;
+    /// prison.insert(20)?;
+    /// prison.insert(30)?;
+    /// let esc_0_1_2 = prison.escort_many_idx(&[0, 1, 2])?;
+    /// // indexes CANNOT be accessed here because they are being escorted outside of the prison
+    /// assert!(prison.visit_many_idx(&[0, 1, 2], |vals| Ok(())).is_err());
+    /// esc_0_1_2.unescort();
+    /// // indexes CAN be accessed here because they were returned and unlocked
+    /// assert!(prison.visit_many_idx(&[0, 1, 2], |vals| Ok(())).is_ok());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unescort(self) {}
+}
+
+impl<'a, T> Drop for EscortedSlice<'a, T> {
+    fn drop(&mut self) {
+        prison_unlock_many_internal_cells(&mut self.cells, self.visits)
+    }
+}
+
+impl<'a, T> Index<usize> for EscortedSlice<'a, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.cells[index].val
+    }
+}
+
+impl<'a, T> IndexMut<usize> for EscortedSlice<'a, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.cells[index].val
+    }
+}
 
 /**************************
  * INTERNAL IMPLEMENTATIONS
  **************************/
-// macro_rules! internal {
-//     ($p:ident) => {
-//         unsafe {&mut *$p.internal.get()}
-//     };
-// }
 
 const NO_FREE: usize = usize::MAX;
 const MAX_CAP: usize = isize::MAX as usize;
@@ -820,7 +1283,13 @@ impl<T> Prison<T> {
     }
 
     #[doc(hidden)]
-    fn lock_one_internal(&self, idx: usize, gen: usize, use_gen: bool) -> Result<(&mut PrisonCellInternal<T>, &mut usize), AccessError> {
+    fn lock_one_internal_split(&self, idx: usize, gen: usize, use_gen: bool) -> Result<(&mut bool, &mut T, &mut usize), AccessError> {
+        let (cell, visits) =  self.lock_one_internal_cell(idx, gen, use_gen)?;
+        return Ok((&mut cell.locked, &mut cell.val, visits));
+    }
+
+    #[doc(hidden)]
+    fn lock_one_internal_cell(&self, idx: usize, gen: usize, use_gen: bool) -> Result<(&mut PrisonCellInternal<T>, &mut usize), AccessError> {
         let internal = internal!(self);
         if idx >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(idx));
@@ -839,10 +1308,9 @@ impl<T> Prison<T> {
     }
 
     #[doc(hidden)]
-    fn lock_many_internal(&self, cell_keys: &[CellKey], use_gens: bool) -> Result<(Vec<&mut bool>, Vec<usize>, Vec<&mut T>, &mut usize), AccessError> {
+    fn lock_many_internal_split(&self, cell_keys: &[CellKey], use_gens: bool) -> Result<(Vec<&mut bool>, Vec<&mut T>, &mut usize), AccessError> {
         let internal = internal!(self);
         let mut vals = Vec::new();
-        let mut indices = Vec::new();
         let mut locks = Vec::new();
         let mut ret_value = Ok(());
         for key in cell_keys {
@@ -858,7 +1326,6 @@ impl<T> Prison<T> {
                     }
                     cell.locked = true;
                     locks.push(&mut cell.locked);
-                    indices.push(key.idx);
                     vals.push(&mut cell.val);
                 },
                 _ => {
@@ -870,31 +1337,80 @@ impl<T> Prison<T> {
         internal.visit_count += 1;
         match ret_value {
             Ok(_) => {
-                return Ok((locks, indices, vals, &mut internal.visit_count));
+                return Ok((locks, vals, &mut internal.visit_count));
             },
             Err(acc_err) => {
-                prison_unlock_many_internal(locks, &mut internal.visit_count);
+                prison_unlock_many_internal(&mut locks, &mut internal.visit_count);
                 return Err(acc_err);
             },
         }
     }
 
     #[doc(hidden)]
-    fn visit_one_internal<FF>(&self, idx: usize, gen: usize, use_gen: bool, mut ff: FF) -> Result<(), AccessError>
-    where FF: FnMut(usize, &mut T) -> Result<(), AccessError> {
-        let (cell, visits) = self.lock_one_internal(idx, gen, use_gen)?;
-        let res = ff(idx, &mut cell.val);
-        prison_unlock_one_internal(&mut cell.locked, visits);
+    fn lock_many_internal_cells(&self, cell_keys: &[CellKey], use_gens: bool) -> Result<(Vec<&mut PrisonCellInternal<T>>, &mut usize), AccessError> {
+        let internal = internal!(self);
+        let mut cells = Vec::new();
+        let mut ret_value = Ok(());
+        for key in cell_keys {
+            if key.idx >= internal.vec.len() {
+                ret_value = Err(AccessError::IndexOutOfRange(key.idx));
+                break;
+            }
+            match &mut internal!(self).vec[key.idx] {
+                CellOrFree::Cell(cell) if (!use_gens || cell.gen == key.gen) => {
+                    if cell.locked {
+                        ret_value = Err(AccessError::IndexAlreadyBeingVisited(key.idx));
+                        break;
+                    }
+                    cell.locked = true;
+                    cells.push(cell);
+                },
+                _ => {
+                    ret_value = Err(AccessError::ValueDeleted(key.idx, key.gen));
+                    break;
+                },
+            }
+        }
+        internal.visit_count += 1;
+        match ret_value {
+            Ok(_) => {
+                return Ok((cells, &mut internal.visit_count));
+            },
+            Err(acc_err) => {
+                prison_unlock_many_internal_cells(&mut cells, &mut internal.visit_count);
+                return Err(acc_err);
+            },
+        }
+    }
+
+    #[doc(hidden)]
+    fn visit_one_internal<F>(&self, idx: usize, gen: usize, use_gen: bool, mut op: F) -> Result<(), AccessError>
+    where F: FnMut(&mut T) -> Result<(), AccessError> {
+        let (lock, val, visits) = self.lock_one_internal_split(idx, gen, use_gen)?;
+        let res = op(val);
+        prison_unlock_one_internal(lock, visits);
         return res;
     }
 
     #[doc(hidden)]
-    fn visit_many_internal<FF>(&self, cell_keys: &[CellKey], use_gens: bool, mut ff: FF) -> Result<(), AccessError>
-    where FF: FnMut(&[usize], &[&mut T]) -> Result<(), AccessError> {
-        let (locks, indices, vals, visits) = self.lock_many_internal(cell_keys, use_gens)?;
-        let result = ff(&indices, &vals);
-        prison_unlock_many_internal(locks, visits);
+    fn visit_many_internal<F>(&self, cell_keys: &[CellKey], use_gens: bool, mut op: F) -> Result<(), AccessError>
+    where F: FnMut(&[&mut T]) -> Result<(), AccessError> {
+        let (mut locks, vals, visits) = self.lock_many_internal_split(cell_keys, use_gens)?;
+        let result = op(&vals);
+        prison_unlock_many_internal(&mut locks, visits);
         return result;
+    }
+
+    #[doc(hidden)]
+    fn escort_internal<'a>(&'a self, idx: usize, gen: usize, use_gen: bool,) -> Result<EscortedValue<'a, T>, AccessError> {
+        let (cell, visits) = self.lock_one_internal_cell(idx, gen, use_gen)?;
+        return Ok(EscortedValue{ cell, visits });
+    }
+
+    #[doc(hidden)]
+    fn escort_many_internal<'a>(&'a self, cell_keys: &[CellKey], use_gens: bool) -> Result<EscortedSlice<'a, T>, AccessError> {
+        let (cells, visits) = self.lock_many_internal_cells(cell_keys, use_gens)?;
+        return Ok(EscortedSlice { cells: cells, visits });
     }
 }
 
@@ -907,9 +1423,18 @@ fn prison_unlock_one_internal(lock: &mut bool, visits: &mut usize) {
 
 #[doc(hidden)]
 #[inline(always)]
-fn prison_unlock_many_internal(locks: Vec<&mut bool>, visits: &mut usize) {
+fn prison_unlock_many_internal(locks: &mut [&mut bool], visits: &mut usize) {
     for lock in locks {
-        *lock = false;
+        **lock = false;
+    }
+    *visits -= 1;
+}
+
+#[doc(hidden)]
+#[inline(always)]
+fn prison_unlock_many_internal_cells<T>(cells: &mut [&mut PrisonCellInternal<T>], visits: &mut usize) {
+    for cell in cells {
+        cell.locked = false;
     }
     *visits -= 1;
 }
@@ -924,6 +1449,16 @@ mod tests {
 
     #[derive(Debug, Eq, PartialEq)]
     struct MyNoCopy(usize);
+
+    impl MyNoCopy {
+        fn val(&self) -> usize {
+            self.0
+        }
+    }
+
+    fn extract_usize(mnc: &MyNoCopy) -> usize {
+        mnc.val()
+    }
 
     #[allow(dead_code)]
     struct SizeEmptyPrisonCell(CellOrFree<()>); // Size 16, Align 8
@@ -946,7 +1481,6 @@ mod tests {
     #[allow(dead_code)]
     struct SizeU128PrisonCell(CellOrFree<u128>); // Size 32, Align 8
     
-
     #[test]
     fn insert_internal() {
         let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
@@ -1071,23 +1605,23 @@ mod tests {
     #[allow(unused_variables)]
     fn visit_one_internal() {
         let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
-        match prison.visit_one_internal(0, 0, false, |idx_1, val_1| Ok(())) {
+        match prison.visit_one_internal(0, 0, false, |val_1| Ok(())) {
             Err(e) if (e == AccessError::IndexOutOfRange(0)) => {},
             _ => panic!()
         };
         let key_0 = prison.insert_internal(0, false, false, MyNoCopy(0)).unwrap();
         let key_1 = prison.insert_internal(1, false, false, MyNoCopy(1)).unwrap();
-        assert!(prison.visit_one_internal(key_0.idx, key_0.gen, true, |idx_0, val_0| {
-            match prison.visit_one_internal(key_0.idx, 99, false, |idx_0_again, val_0_again| Ok(())) {
+        assert!(prison.visit_one_internal(key_0.idx, key_0.gen, true, |val_0| {
+            match prison.visit_one_internal(key_0.idx, 99, false, |val_0_again| Ok(())) {
                 Err(e) if (e == AccessError::IndexAlreadyBeingVisited(0)) => {},
                 _ => panic!()
             };
-            match prison.visit_one_internal(key_0.idx, key_0.gen, true, |idx_0_again, val_0_again| Ok(())) {
+            match prison.visit_one_internal(key_0.idx, key_0.gen, true, |val_0_again| Ok(())) {
                 Err(e) if (e == AccessError::IndexAlreadyBeingVisited(0)) => {},
                 _ => panic!()
             };
             *val_0 = MyNoCopy(100);
-            assert!(prison.visit_one_internal(key_1.idx, 99, false, |idx_1, val_1| {
+            assert!(prison.visit_one_internal(key_1.idx, 99, false, |val_1| {
                 *val_1 = MyNoCopy(101);
                 Ok(())
             }).is_ok());
@@ -1100,7 +1634,7 @@ mod tests {
                 _ => panic!(),
             }
             prison.remove_internal(key_1.idx, key_1.gen, true).unwrap();
-            match prison.visit_one_internal(key_1.idx, key_1.gen, false, |idx_1, val_1| Ok(())) {
+            match prison.visit_one_internal(key_1.idx, key_1.gen, false, |val_1| Ok(())) {
                 Err(e) if (e == AccessError::ValueDeleted(key_1.idx, key_1.gen)) => {},
                 _ => panic!()
             };
@@ -1116,23 +1650,23 @@ mod tests {
         for i in 0..10usize {
             keys.push(prison.insert_internal(0, false, false, MyNoCopy(i)).unwrap());
         }
-        assert!(prison.visit_many_internal(&[], true, |nothing, none| Ok(())).is_ok());
-        assert!(prison.visit_many_internal(&keys[0..1], true, |idx_0, val_0| {
-            assert!(prison.visit_many_internal(&keys[1..5], true, |idx_1_4, val_1_4| {
-                match prison.visit_many_internal(&[CellKey{idx: 10, gen: 0}, CellKey{idx: 11, gen: 0}, CellKey{idx: 12, gen: 0}], true, |out_of_bounds, bad| Ok(())) {
+        assert!(prison.visit_many_internal(&[], true, |none| Ok(())).is_ok());
+        assert!(prison.visit_many_internal(&keys[0..1], true, |val_0| {
+            assert!(prison.visit_many_internal(&keys[1..5], true, |val_1_4| {
+                match prison.visit_many_internal(&[CellKey{idx: 10, gen: 0}, CellKey{idx: 11, gen: 0}, CellKey{idx: 12, gen: 0}], true, |bad| Ok(())) {
                     Err(e) if (e == AccessError::IndexOutOfRange(10)) => {},
                     _ => panic!()
                 };
-                assert!(prison.visit_many_internal(&keys[5..10], false, |idx_5_9, val_5_9| {
-                    match prison.visit_many_internal(&keys[2..9], true, |idx_1, val_1| Ok(())) {
+                assert!(prison.visit_many_internal(&keys[5..10], false, |val_5_9| {
+                    match prison.visit_many_internal(&keys[2..9], true, |val_1| Ok(())) {
                         Err(e) if (e == AccessError::IndexAlreadyBeingVisited(2)) => {},
                         _ => panic!()
                     };
-                    assert!(prison.visit_many_internal(&[], true, |nothing, none| Ok(())).is_ok());
+                    assert!(prison.visit_many_internal(&[], true, |none| Ok(())).is_ok());
                     Ok(())
                 }).is_ok());
                 prison.remove_internal(9, 0, true).unwrap();
-                match prison.visit_many_internal(&keys[5..10], true, |idx_1, val_1| Ok(())) {
+                match prison.visit_many_internal(&keys[5..10], true, |val_1| Ok(())) {
                     Err(e) if (e == AccessError::ValueDeleted(9, 0)) => {},
                     _ => panic!()
                 };
@@ -1140,12 +1674,88 @@ mod tests {
             }).is_ok());
             Ok(())
         }).is_ok());
-        match prison.visit_many_internal(&keys, true, |all_idx, all_vals| Ok(())) {
+        match prison.visit_many_internal(&keys, true, |all_vals| Ok(())) {
             Err(e) if (e == AccessError::ValueDeleted(9, 0)) => {},
             _ => panic!()
         };
         let new_key_9 = prison.insert_internal(9, true, true, MyNoCopy(9)).unwrap();
         keys[9] = new_key_9;
-        assert!(prison.visit_many_internal(&keys, true, |all_idx, all_vals| Ok(())).is_ok());
+        assert!(prison.visit_many_internal(&keys, true, |all_vals| Ok(())).is_ok());
+    }
+
+    #[test]
+    #[allow(unused_variables)]
+    fn escort_internal() {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(2);
+        let key_0 = prison.insert(MyNoCopy(0)).unwrap();
+        let key_1 = prison.insert(MyNoCopy(1)).unwrap();
+        let mut esc_0 = prison.escort_internal(key_0.idx, key_0.gen, true).unwrap();
+        let mut esc_1 = prison.escort_internal(1, 0, false).unwrap();
+        assert!(prison.escort_internal(key_0.idx, key_0.gen, true).is_err());
+        assert!(prison.visit(key_1, |val_1| Ok(())).is_err());
+        let extract_0 = extract_usize(&esc_0);
+        let extract_1 = extract_usize(&esc_1);
+        assert_eq!(extract_0, 0);
+        assert_eq!(extract_1, 1);
+        *esc_0 = MyNoCopy(42);
+        *esc_1 = MyNoCopy(69);
+        esc_0.unescort();
+        esc_1.unescort();
+        assert!(prison.visit(key_1, |val_1| Ok(())).is_ok());
+        {
+            let mut esc_0 = prison.escort_internal(0, 0, false).unwrap();
+            let esc_1 = prison.escort_internal(key_1.idx, key_1.gen, true).unwrap();
+            assert_eq!((*esc_0).0 + (*esc_1).0, 111);
+            let mut_ref_0: &mut MyNoCopy = &mut *esc_0;
+            *mut_ref_0 = MyNoCopy(52);
+            assert_eq!((*esc_0).0 + (*esc_1).0, 121);
+            let ref_1: & MyNoCopy = & *esc_1;
+            assert_eq!((*ref_1).0, 69);
+            assert!(prison.remove(key_0).is_err());
+            assert!(prison.insert(MyNoCopy(99999)).is_err());
+        }
+        assert!(prison.visit_many(&[key_0, key_1], |vals| Ok(())).is_ok());
+        assert!(prison.remove(key_0).is_ok());
+        assert!(prison.insert(MyNoCopy(99999)).is_ok());
+    }
+
+    #[test]
+    #[allow(unused_variables)]
+    fn escort_many_internal() {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(5);
+        let key_0 = prison.insert(MyNoCopy(0)).unwrap();
+        let key_1 = prison.insert(MyNoCopy(1)).unwrap();
+        let key_2 = prison.insert(MyNoCopy(2)).unwrap();
+        let key_3 = prison.insert(MyNoCopy(3)).unwrap();
+        let key_4 = prison.insert(MyNoCopy(4)).unwrap();
+        let mut esc_0_1_2 = prison.escort_many_internal(&[key_0, key_1, key_2], true).unwrap();
+        let mut esc_3_4 = prison.escort_many_internal(&[key_3, key_4], false).unwrap();
+        assert!(prison.escort_internal(key_0.idx, key_0.gen, true).is_err());
+        assert!(prison.escort_many_internal(&[key_0, key_1, key_2, key_3, key_4], true).is_err());
+        assert!(prison.visit(key_1, |val_1| Ok(())).is_err());
+        let extract_0 = extract_usize(&esc_0_1_2[0]);
+        let extract_1 = extract_usize(&esc_0_1_2[1]);
+        assert_eq!(extract_0, 0);
+        assert_eq!(extract_1, 1);
+        esc_0_1_2[0] = MyNoCopy(42);
+        esc_3_4[1] = MyNoCopy(69);
+        esc_0_1_2.unescort();
+        esc_3_4.unescort();
+        assert!(prison.visit(key_1, |val_1| Ok(())).is_ok());
+        {
+            let mut esc_0_1_2 = prison.escort_many_internal(&[key_0, key_1, key_2], true).unwrap();
+            let esc_3_4 = prison.escort_many_internal(&[key_3, key_4], false).unwrap();
+            assert_eq!(esc_0_1_2[0].0 + esc_3_4[1].0, 111);
+            let mut_ref_0: &mut MyNoCopy = &mut esc_0_1_2[0];
+            *mut_ref_0 = MyNoCopy(52);
+            assert_eq!(esc_0_1_2[0].0 + esc_3_4[1].0, 121);
+            let ref_1: & MyNoCopy = &esc_3_4[1];
+            assert_eq!((*ref_1).0, 69);
+            assert!(prison.remove(key_0).is_err());
+            assert!(prison.insert(MyNoCopy(99999)).is_err());
+        }
+        assert!(prison.visit_many(&[key_0, key_4], |vals| Ok(())).is_ok());
+        assert!(prison.remove(key_0).is_ok());
+        assert!(prison.insert(MyNoCopy(99999)).is_ok());
     }
 }

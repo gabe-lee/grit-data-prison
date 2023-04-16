@@ -1,6 +1,7 @@
 /*!This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure 
 that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
-that take closures that are passed mutable references to the values.
+that take closures that are passed mutable references to the values, or by using the `.escort()` methods to
+obtain a guarded mutable reference to the value.
 
 This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its methods differ from
 those found on a [Vec], how to use its unusual `.visit()` methods, and how it achieves memory safety.
@@ -17,7 +18,7 @@ those found on a [Vec], how to use its unusual `.visit()` methods, and how it ac
 - Uses [bool] locks on each element and a master [usize] counter to track the number/location of active references and prevent mutable reference aliasing and disallow scenarios that could invalidate existing references
 - [CellKey] uses a [usize] index and [usize] generation to match an index to the context in which it was created and prevent two unrelated values that both at some point lived at the same index from being mistaken as equal
 - All methods return an [AccessError] where the scenario would cause a panic if not caught
- 
+
 ### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
 See [changelog](#changelog)
@@ -60,7 +61,9 @@ prison.insert(String::from("World!"))?;
 # Ok(())
 # }
 ```
-You can then use one of the `.visit()` methods to access a mutable reference
+From here there are 2 main ways to access the values contained in the [Prison](crate::single_threaded::Prison)
+## Visiting the values in prison
+You can use one of the `.visit()` methods to access a mutable reference
 to your data from within a closure
 ```rust
 # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
@@ -101,7 +104,7 @@ prison.visit_many_idx(&[0, 1], |vals| {
 # Ok(())
 # }
 ```
-### Full Example Code
+### Full Visit Example Code
 ```rust
 use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
 
@@ -127,25 +130,103 @@ fn main() -> Result<(), AccessError> {
     Ok(())
 }
 ```
+## Escorting the values out of the prison temporarily
+You can also use one of the `.escort()` methods to obtain a guarded wrapper around your data as well,
+perventing any other access to that element while the value is in scope. 
+
+First you need to import [EscortedValue](crate::single_threaded::EscortedValue) or
+[EscortedSlice](crate::single_threaded::EscortedSlice) from the same module as
+[Prison](crate::single_threaded::Prison)
+```rust
+use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue, EscortedSlice}};
+```
+Then obtain an [EscortedValue](crate::single_threaded::EscortedValue) by using `.escort()`
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
+# fn main() -> Result<(), AccessError> {
+let prison: Prison<String> = Prison::new();
+let key_hello = prison.insert(String::from("Hello, "))?;
+prison.insert(String::from("World!"))?;
+let esc_hello = prison.escort(key_hello)?;
+# Ok(())
+# }
+```
+As long as the value isnt being visited or escorted, you can escort (or visit) that value, even when other values from the same
+prison are being visited or escorted. [EscortedValue](crate::single_threaded::EscortedValue) keeps the element locked
+until it goes out of scope. This can be done by wrapping the area it is used in a code block, or by manually
+calling `.unescort()` on it to cause it to go out of scope an unlock immediately.
+
+To access the data inside an [EscortedValue](crate::single_threaded::EscortedValue) you dereference it,
+and to access the values in an [EscortedSlice](crate::single_threaded::EscortedSlice) you index into it
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue, EscortedSlice}};
+# fn main() -> Result<(), AccessError> {
+# let prison: Prison<String> = Prison::new();
+# let key_hello = prison.insert(String::from("Hello, "))?;
+# prison.insert(String::from("World!"))?;
+{
+    let esc_hello = prison.escort(key_hello)?;
+    let esc_world = prison.escort_idx(1)?;
+    println!("{}{}", *esc_hello, *esc_world); // Prints "Hello, World!"
+}
+// block ends, both escorts go out of scope and their values unlock
+let mut esc_world_to_rust = prison.escort_idx(1)?;
+*esc_world_to_rust = String::from("Rust!!");
+esc_world_to_rust.unescort(); // index one is returned and unlocked manually
+let esc_both = prison.escort_many_idx(&[0, 1])?;
+println!("{}{}", esc_both[0], esc_both[1]); // Prints "Hello, Rust!!"
+# Ok(())
+# }
+```
+### Full Escort Example Code
+```rust
+use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue, EscortedSlice}};
+
+fn main() -> Result<(), AccessError> {
+    let prison: Prison<String> = Prison::new();
+    let key_hello = prison.insert(String::from("Hello, "))?;
+    prison.insert(String::from("World!"))?;
+    {
+        let esc_hello = prison.escort(key_hello)?;
+        let esc_world = prison.escort_idx(1)?;
+        println!("{}{}", *esc_hello, *esc_world); // Prints "Hello, World!"
+    }
+    // block ends, both escorts go out of scope and their values unlock
+    let mut esc_world_to_rust = prison.escort_idx(1)?;
+    *esc_world_to_rust = String::from("Rust!!");
+    esc_world_to_rust.unescort(); // index one is returned and unlocked manually
+    let esc_both = prison.escort_many_idx(&[0, 1])?;
+    println!("{}{}", esc_both[0], esc_both[1]); // Prints "Hello, Rust!!"
+    Ok(())
+}
+```
 Operations that affect the underlying [Vec] can also be done
-from *within* `.visit()` closures as long as none of the following rules are violated:
-- The operation does not remove, read, or modify any element that is *currently* being visited
+from *within* `.visit()` closures or while values are `escort()`-ed as long as none of the following rules are violated:
+- The operation does not remove, read, or modify any element that is *currently* being visited or escorted
 - The operation does not cause a re-allocation of the entire [Vec] (or otherwise cause the entire [Vec] to relocate to another memory address)
 ```rust
 # use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
 # fn main() -> Result<(), AccessError> {
-let prison: Prison<u64> = Prison::with_capacity(10);
+let prison: Prison<u64> = Prison::with_capacity(5);
 prison.insert(0)?;
 prison.insert(10)?;
 prison.insert(20)?;
 prison.insert(30)?;
 prison.insert(42)?;
 let mut accidental_val: u64 = 0;
+let mut esc_0 = prison.escort_idx(0)?;
 prison.visit_idx(3, |val| {
     accidental_val = prison.remove_idx(4)?;
     prison.insert_at(4, 40);
     Ok(())
 });
+*esc_0 = 80;
+esc_0.unescort();
+// No values are visited or escorted here so we can perform
+// an action that would cause re-allocation safely
+for i in 0..100u64 {
+    prison.insert(i + 100)?;
+}
 # Ok(())
 # }
 ```
@@ -153,11 +234,15 @@ For more examples, see the specific documentation for the relevant type/method
  
 # Why this strange syntax?
  
-Closures provide a safe sandbox to access mutable references, as they cant be moved out of the closure,
+For the `visit()` methodology, closures provide a safe sandbox to access mutable references, as they cant be moved out of the closure,
 and because the `visit()` functions that take the closures handle all of the
 safety and housekeeping needed before and after.
  
 Since closures use generics the rust compiler can inline them in many/most/all? cases.
+
+The `escort()` methodology requires the values not be able to leak, alias, or never unlock, 
+so they are wrapped in structs that provide limited access to the mutable references and know how to
+automatically unlock the value when they go out of scope
  
 # How is this safe?!
  
@@ -208,17 +293,23 @@ prison.visit_idx(0, |mut_ref| {
 ```
 ### Example: run-time safety
 ```rust
-# use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
+# use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison, EscortedValue}};
 struct MyStruct(u32);
 
 fn main() -> Result<(), AccessError> {
     let prison: Prison<MyStruct> = Prison::with_capacity(2); // Note this prison can only hold 2 elements
     let key_0 = prison.insert(MyStruct(1))?;
     prison.insert(MyStruct(2))?;
+    let esc_0 = prison.escort(key_0)?;
+    assert!(prison.escort(key_0).is_err());
+    assert!(prison.escort_idx(0).is_err());
+    esc_0.unescort();
     prison.visit(key_0, |val_0| {
         assert!(prison.visit(key_0, |val_0_again| Ok(())).is_err());
         assert!(prison.visit_idx(0, |val_0_again| Ok(())).is_err());
         assert!(prison.visit_idx(3, |val_3_out_of_bounds| Ok(())).is_err());
+        assert!(prison.escort(key_0).is_err());
+        assert!(prison.escort_idx(3).is_err());
         prison.visit_idx(1, |val_1| {
             assert!(prison.remove_idx(1).is_err()); // would delete memory referenced by val_1
             assert!(prison.remove(key_0).is_err()); // would delete memory referenced by val_0
@@ -255,6 +346,7 @@ evolves, I may add/remove methods altogether, etc.
  
 Possible future additions may include:
 - [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
+- [x] `Escort` api for a more Rust-idiomatic way to access values
 - [ ] More public methods (as long as they make sense and don't bloat the API)
 - [ ] Multi-thread safe `AtomicPrison<T>`
 - [ ] ? Single standalone value version, `JailCell<T>`
@@ -275,7 +367,9 @@ that the provided mutable references can be made to point to invalid/illegal mem
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
 # Changelog
- - Version 0.2.x has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
+ - Version 0.2.2: Non-Breaking update to [EscortedValue](crate::single_threaded::EscortedValue) and [EscortedSlice](crate::single_threaded::EscortedSlice) to reduce their memory footprint
+ - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
+ - Version 0.2.x: has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
  - Version 0.1.x: first version, plain old [Vec] with [usize] indexing
 */
 
@@ -400,7 +494,7 @@ impl CellKey {
         return CellKey { idx, gen };
     }
 
-    /// Return the internal index and generation from the cell key
+    /// Return the internal index and generation from the cell key, in that order
     /// 
     /// Not recomended in most cases. If you need just the index by itself,
     /// use [CellKey::idx()] instead
