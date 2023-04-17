@@ -230,7 +230,23 @@ for i in 0..100u64 {
 # Ok(())
 # }
 ```
-For more examples, see the specific documentation for the relevant type/method
+Also provided is a quick shortcut to clone values out of the [Prison<T>](crate::single_threaded::Prison) 
+when type T implements [Clone]. Because cloning values does not alter the original or presume any 
+precondition regarding the content of the value, it is safe (in a single-threaded context) to
+clone values that are currently being escorted or visited.
+### Example
+```rust
+# use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison}};
+# fn main() -> Result<(), AccessError> {
+let prison: Prison<String> = Prison::new();
+let key_0 = prison.insert(String::from("Foo"))?;
+prison.insert(String::from("Bar"))?;
+let cloned_foo = prison.clone_val(key_0)?;
+let cloned_bar = prison.clone_val_idx(1)?;
+# Ok(())
+# }
+```
+For more examples, see the specific documentation for the relevant types/methods
  
 # Why this strange syntax?
  
