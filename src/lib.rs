@@ -383,6 +383,7 @@ that the provided mutable references can be made to point to invalid/illegal mem
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
 # Changelog
+ - Version 0.2.3: Non-Breaking feature: `clone_val()` methods to shortcut cloning a value when T implements [Clone]
  - Version 0.2.2: Non-Breaking update to [EscortedValue](crate::single_threaded::EscortedValue) and [EscortedSlice](crate::single_threaded::EscortedSlice) to reduce their memory footprint
  - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
  - Version 0.2.x: has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena

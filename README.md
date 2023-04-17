@@ -193,6 +193,18 @@ for i in 0..100u64 {
     prison.insert(i + 100)?;
 }
 ```
+Also provided is a quick shortcut to clone values out of the [Prison<T>](crate::single_threaded::Prison) 
+when type T implements [Clone]. Because cloning values does not alter the original or presume any 
+precondition regarding the content of the value, it is safe (in a single-threaded context) to
+clone values that are currently being escorted or visited.
+### Example
+```rust
+let prison: Prison<String> = Prison::new();
+let key_0 = prison.insert(String::from("Foo"))?;
+prison.insert(String::from("Bar"))?;
+let cloned_foo = prison.clone_val(key_0)?;
+let cloned_bar = prison.clone_val_idx(1)?;
+```
 For more examples, see the specific documentation for the relevant type/method
  
 # Why this strange syntax?
@@ -325,6 +337,7 @@ that the provided mutable references can be made to point to invalid/illegal mem
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
 # Changelog
+ - Version 0.2.3: Non-Breaking feature: `clone_val()` methods to shortcut cloning a value when T implements [Clone]
  - Version 0.2.2: Non-Breaking update to [EscortedValue] and [EscortedSlice] to reduce their memory footprint
  - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
  - Version 0.2.x: has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
