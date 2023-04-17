@@ -8,7 +8,7 @@ those found on a [Vec], how to use its unusual `.visit()` methods, and how it ac
 
 [On: Crates.io](https://crates.io/crates/grit-data-prison)  
 [On: Github](https://github.com/gabe-lee/grit-data-prison)  
-[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.0/grit_data_prison/)  
+[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.3/grit_data_prison/)  
 
 ### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
