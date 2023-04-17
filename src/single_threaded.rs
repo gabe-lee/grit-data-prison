@@ -992,6 +992,102 @@ impl<T> Prison<T> {
         let keys: Vec<CellKey> = (start..end).map(|idx| CellKey {idx, gen: 0}).collect();
         return self.escort_many_internal(&keys, false)
     }
+
+    /// Clones the requested value out of the [Prison] into a new variable
+    /// 
+    /// Only available when elements of type T implement [Clone]. Because cloning does not alter the original,
+    /// and because the new variable to hold the clone does not have any presumtions about the value, it
+    /// is safe (in a single-threaded context) to clone out the value even if it is being visited or escorted.
+    /// 
+    /// This method *will* still return an error if the index or generation of the [CellKey] are invalid
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<String> = Prison::new();
+    /// let key_0 = prison.insert(String::from("Foo"))?;
+    /// let key_1 = prison.insert(String::from("Bar"))?;
+    /// let mut take_foo = String::new();
+    /// let mut take_bar = String::new();
+    /// prison.visit(key_0, |val_0| {
+    ///     take_foo = prison.clone_val(key_0)?;
+    ///     Ok(())
+    /// });
+    /// let esc_1 = prison.escort(key_1)?;
+    /// take_bar = prison.clone_val(key_1)?;
+    /// esc_1.unescort();
+    /// assert_eq!(take_foo, String::from("Foo"));
+    /// assert_eq!(take_bar, String::from("Bar"));
+    /// prison.remove(key_1)?;
+    /// assert!(prison.clone_val(CellKey::from_raw_parts(10, 10)).is_err());
+    /// assert!(prison.clone_val(key_1).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn clone_val(&self, key: CellKey) -> Result<T, AccessError>
+    where T: Clone {
+        let internal = internal!(self);
+        if key.idx >= internal.vec.len() {
+            return Err(AccessError::IndexOutOfRange(key.idx));
+        }
+        match &internal.vec[key.idx] {
+            CellOrFree::Cell(cell) if (cell.gen == key.gen) => {
+                return Ok(cell.val.clone());
+            },
+            _ => {
+                return Err(AccessError::ValueDeleted(key.idx, key.gen))
+            },
+        }
+    }
+
+    /// Clones the requested value out of the [Prison] into a new variable
+    /// 
+    /// Similar to `clone_val()` but disregards the generation counter
+    /// 
+    /// Only available when elements of type T implement [Clone]. Because cloning does not alter the original,
+    /// and because the new variable to hold the clone does not have any presumtions about the value, it
+    /// is safe (in a single-threaded context) to clone out the value even if it is being visited or escorted.
+    /// 
+    /// This method *will* still return an error if the index or generation of the [CellKey] are invalid
+    /// ### Example
+    /// ```rust
+    /// # use grit_data_prison::{AccessError, CellKey, single_threaded::{Prison}};
+    /// # fn main() -> Result<(), AccessError> {
+    /// let prison: Prison<String> = Prison::new();
+    /// prison.insert(String::from("Foo"))?;
+    /// prison.insert(String::from("Bar"))?;
+    /// let mut take_foo = String::new();
+    /// let mut take_bar = String::new();
+    /// prison.visit_idx(0, |val_0| {
+    ///     take_foo = prison.clone_val_idx(0)?;
+    ///     Ok(())
+    /// });
+    /// let esc_1 = prison.escort_idx(1)?;
+    /// take_bar = prison.clone_val_idx(1)?;
+    /// esc_1.unescort();
+    /// assert_eq!(take_foo, String::from("Foo"));
+    /// assert_eq!(take_bar, String::from("Bar"));
+    /// prison.remove_idx(1)?;
+    /// assert!(prison.clone_val_idx(10).is_err());
+    /// assert!(prison.clone_val_idx(1).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn clone_val_idx(&self, idx: usize) -> Result<T, AccessError>
+    where T: Clone {
+        let internal = internal!(self);
+        if idx >= internal.vec.len() {
+            return Err(AccessError::IndexOutOfRange(idx));
+        }
+        match &internal.vec[idx] {
+            CellOrFree::Cell(cell) => {
+                return Ok(cell.val.clone());
+            },
+            _ => {
+                return Err(AccessError::ValueDeleted(idx, 0))
+            },
+        }
+    }
 }
 
 /// Struct representing a value that has been allowed to leave the [Prison] temporarily,
