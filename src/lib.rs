@@ -1,5 +1,5 @@
 //REGION MAIN DOCUMENTATION
-/*!This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure 
+/*!This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure
 that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
 that take closures that are passed mutable references to the values, or by using the `.guard()` methods to
 obtain a guarded mutable reference to the value.
@@ -7,9 +7,9 @@ obtain a guarded mutable reference to the value.
 This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its methods differ from
 those found on a [Vec], how to access the data contained in it, and how it achieves memory safety.
 
-[On: Crates.io](https://crates.io/crates/grit-data-prison)  
-[On: Github](https://github.com/gabe-lee/grit-data-prison)  
-[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.3/grit_data_prison/)  
+[On: Crates.io](https://crates.io/crates/grit-data-prison)
+[On: Github](https://github.com/gabe-lee/grit-data-prison)
+[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.3/grit_data_prison/)
 
 ### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
@@ -27,18 +27,18 @@ This package is still UNSTABLE and may go through several iterations before I co
 See [changelog](#changelog)
 
 # Motivation
- 
+
 I wanted a data structure that met these criteria:
 - Backed by a [Vec<T>] (or similar) for cache efficiency
 - Allowed interior mutability to each of its elements
 - Was fully memory safe (***needs verification***)
 - Always returned a relevant error instead of panicking
 - Was easier to reason about when and where it might error than reference counting
- 
+
 # Usage
- 
+
 This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
- 
+
 First, add this crate as a dependency to your project:
 ```toml
 [dependencies]
@@ -50,7 +50,7 @@ the file where it is needed (right now only one flavor is available, [single_thr
 use grit_data_prison::{AccessError, CellKey, single_threaded::Prison};
 ```
 Create a [Prison<T>](crate::single_threaded::Prison) and add your data to it using one of the `insert()` type methods
- 
+
 Note the following quirks:
 - A [Prison](crate::single_threaded::Prison) does not need to be declared `mut` to mutate it
 - `insert()` and its variants return a [Result]<[CellKey], [AccessError]> that you need to handle
@@ -139,7 +139,7 @@ fn main() -> Result<(), AccessError> {
 ```
 ## Guarding values with wrapper structs
 You can also use one of the `.guard()` methods to obtain a guarded wrapper around your data,
-keeping the value marked as referenced as long as the wrapper remains in scope. 
+keeping the value marked as referenced as long as the wrapper remains in scope.
 
 First you need to import one of [PrisonValueMut](crate::single_threaded::PrisonValueMut),
 [PrisonValueRef](crate::single_threaded::PrisonValueRef), [PrisonSliceMut](crate::single_threaded::PrisonSliceMut),
@@ -162,7 +162,7 @@ let grd_hello = prison.guard_ref(key_hello)?;
 As long as the referencing rules aren't violated, you can guard (or visit) that value, even when other values from the same
 prison are being visited or guarded. The guarded wrappers (for example [PrisonValueRef](crate::single_threaded::PrisonValueRef))
 keep the element(s) marked with the appropriate form of referencing until they go out of scope.
-This can be done by wrapping the area it is used in a code block, or by manually passing it to the 
+This can be done by wrapping the area it is used in a code block, or by manually passing it to the
 associated `::unguard()` function on the wrapper type to immediately drop it out of scope and update the
 reference count.
 
@@ -240,8 +240,8 @@ for i in 0..100u64 {
 # Ok(())
 # }
 ```
-Also provided is a quick shortcut to clone values out of the [Prison<T>](crate::single_threaded::Prison) 
-when type T implements [Clone]. Because cloning values does not alter the original or presume any 
+Also provided is a quick shortcut to clone values out of the [Prison<T>](crate::single_threaded::Prison)
+when type T implements [Clone]. Because cloning values does not alter the original or presume any
 precondition regarding the content of the value, it is safe (in a single-threaded context) to
 clone values that are currently being guarded or visited.
 ### Example
@@ -260,7 +260,7 @@ For more examples, see the specific documentation for the relevant types/methods
 
 ## JailCell
 Also included is the struct [JailCell<T>](crate::single_threaded::JailCell), which acts as a stand-alone
-version of a [Prison<T>](crate::single_threaded::Prison), but with no generation counter. 
+version of a [Prison<T>](crate::single_threaded::Prison), but with no generation counter.
 
 [JailCell](crate::single_threaded::JailCell) includes the same basic interface as [Prison](crate::single_threaded::Prison)
 and also employs reference counting, but with a much simpler set of safety checks
@@ -284,22 +284,22 @@ fn main() -> Result<(), AccessError> {
 ```
 See the documentation on [JailCell](crate::single_threaded::JailCell) for more info
 # Why this strange syntax?
- 
+
 For the `visit()` methodology, closures provide a safe sandbox to access mutable references, as they cant be moved out of the closure,
 and because the `visit()` functions that take the closures handle all of the
 safety and housekeeping needed before and after.
- 
+
 Since closures use generics the rust compiler can inline them in many/most/all? cases.
 
-The `guard()` methodology requires the values not be able to leak, alias, or never reset their reference counts, 
+The `guard()` methodology requires the values not be able to leak, alias, or never reset their reference counts,
 so they are wrapped in structs that provide limited access to the references and know how to
 automatically reset the reference counter for the value when they go out of scope
- 
+
 # How is this safe?!
- 
+
 The short answer is: it *should* be *mostly* safe.
 I welcome any feedback and analysis showing otherwise so I can fix it or revise my methodology.
- 
+
 [Prison](crate::single_threaded::Prison) follows a few simple rules:
 - You can only get an immutable reference if the value has zero references or only immutable references
 - You can only get a mutable reference is the value has zero references of any type
@@ -310,11 +310,11 @@ In addition, it provides the functionality of a Generational Arena with these ad
 - The [Prison](crate::single_threaded::Prison) has a master generation counter to track the largest generation of any element inside it
 - Every valid element has a generation attatched to it, and `insert()` operations return a [CellKey] that pairs the element index with the current largest generation value
 - Any operation that removes *or* overwrites a valid element *with a genreation counter that is equal to the largest generation* causes the master generation counter to increase by one
- 
+
 It achieves all of the above with a few lightweight sentinel values:
 - A single [UnsafeCell](std::cell::UnsafeCell) to hold *all* of the [Prison](crate::single_threaded::Prison) internals and provide interior mutability
 - A master `access_count` [usize] on [Prison](crate::single_threaded::Prison) itself to track whether *any* reference is in active
-- Each element is either a `Cell` or `Free` variant: 
+- Each element is either a `Cell` or `Free` variant:
     - A `Free` simply contains the value of the *next* free index after this one is filled
     - A `ref_count` [usize] on each `Cell` that tracks both mutable and immutable references
     - A `generation` [usize] on each `Cell` to use when matching to the [CellKey] used to access the index
@@ -391,11 +391,11 @@ Therefore the total _additional_ size compared to a [Vec<T>] on a 64-bit system 
 32 bytes flat + 16 bytes per element
 
 # How this crate may change in the future
- 
+
 This crate is very much UNSTABLE, meaning that not every error condition may have a test,
 methods may return different errors/values as my understanding of how they should be properly implemented
 evolves, I may add/remove methods altogether, etc.
- 
+
 Possible future additions may include:
 - [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
 - [x] `Guard` api for a more Rust-idiomatic way to access values
@@ -405,12 +405,12 @@ Possible future additions may include:
 - [ ] ? Multi-thread safe standalone value version, `AtomicJailCell<T>`
 - [ ] ?? Completely unchecked and unsafe version `UnPrison<T>`
 - [ ] ??? Multi-thread ~~safe~~ unsafe version `AtomicUnPrison<T>`
- 
+
 # How to Help/Contribute
- 
+
 This crate is [on crates.io](https://crates.io/crates/grit-data-prison)
 The repo is [on github](https://github.com/gabe-lee/grit-data-prison)
- 
+
 Feel free to leave feedback, or fork/branch the project and submit fixes/optimisations!
 
 If you can give me concrete examples that *definitely* violate memory-safety, meaning
@@ -438,13 +438,26 @@ to be possible), I'd love to fix, further restrict, or rethink the crate entirel
 #![allow(clippy::needless_return)]
 #![allow(clippy::needless_lifetimes)]
 
-
 //REGION Crate Imports
 #[cfg(not(feature = "no_std"))]
-pub(crate) use std::{num::NonZeroUsize, mem, ops::{RangeBounds, Deref, DerefMut}, borrow::{Borrow, BorrowMut}, fmt::{Display, Debug}, cell::UnsafeCell, error::Error};
+pub(crate) use std::{
+    borrow::{Borrow, BorrowMut},
+    cell::UnsafeCell,
+    error::Error,
+    fmt::{Debug, Display},
+    mem,
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut, RangeBounds},
+};
 
 #[cfg(feature = "no_std")]
-pub(crate) use core::{num::NonZeroUsize, ops::{RangeBounds, Deref, DerefMut}, borrow::{Borrow, BorrowMut}, fmt::{Display, Debug}, cell::UnsafeCell};
+pub(crate) use core::{
+    borrow::{Borrow, BorrowMut},
+    cell::UnsafeCell,
+    fmt::{Debug, Display},
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut, RangeBounds},
+};
 
 #[cfg(feature = "no_std")]
 pub(crate) trait Error: Debug + Display {
@@ -459,10 +472,10 @@ pub mod single_threaded;
 //ENUM AccessError
 /// Error type that provides helpful information about why an operation on any
 /// [Prison](crate::single_threaded::Prison) or [JailCell](crate::single_threaded::JailCell) failed
-/// 
+///
 /// Every error returned from functions or methods defined in this crate will be one of these variants,
 /// and all safe versions of [Prison](crate::single_threaded::Prison) and [JailCell](crate::single_threaded::JailCell) are designed to never panic and always return errors.
-/// 
+///
 /// Additional variants may be added in the future, therefore it is recommended you add a catch-all branch
 /// to any match statements on this enum to future-proof your code:
 /// ```rust
@@ -477,8 +490,8 @@ pub mod single_threaded;
 /// }
 /// # }
 /// ```
-/// 
-/// [AccessError] has a custom implementation for both [std::fmt::Display] and 
+///
+/// [AccessError] has a custom implementation for both [std::fmt::Display] and
 /// [std::fmt::Debug] traits, with the `Display` version giving a short description of the problem,
 /// and the `Debug` version giving a more in-depth explaination of exactly why an error had to be
 /// returned
@@ -502,7 +515,7 @@ pub enum AccessError {
     /// from the underlying [Vec<T>] would invalidate the reference
     RemoveWhileValueReferenced(usize),
     /// Indicates that the value requested was deleted and a new value with an updated generation took its place
-    /// 
+    ///
     /// Contains the index and generation from the invalid [CellKey], in that order
     ValueDeleted(usize, usize),
     /// Indicates that a very large number of removes and inserts caused the generation counter to reach its max value
@@ -553,12 +566,9 @@ impl Debug for AccessError {
 
 impl Error for AccessError {}
 
-
-
-
 //STRUCT CellKey
 /// Struct that defines a packaged index into a [Prison](crate::single_threaded::Prison)
-/// 
+///
 /// This struct is designed to be passed to some other struct or function that needs to be able to
 /// reference the data stored at the cell number.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -569,7 +579,7 @@ pub struct CellKey {
 
 impl CellKey {
     /// Create a new index from an index and generation
-    /// 
+    ///
     /// Not recomended in most cases, as there is no way to guarantee an item with that
     /// exact index and generation exists in your [Prison](crate::single_threaded::Prison)
     pub fn from_raw_parts(idx: usize, gen: usize) -> CellKey {
@@ -577,7 +587,7 @@ impl CellKey {
     }
 
     /// Return the internal index and generation from the cell key, in that order
-    /// 
+    ///
     /// Not recomended in most cases. If you need just the index by itself,
     /// use [CellKey::idx()] instead
     pub fn into_raw_parts(&self) -> (usize, usize) {
@@ -585,20 +595,20 @@ impl CellKey {
     }
 
     /// Return only the index of the [CellKey]
-    /// 
+    ///
     /// Useful if you want to only get the value at the specified index in the [Prison](crate::single_threaded::Prison)
     /// without checking that the generations match
     pub fn idx(&self) -> usize {
-        return self.idx
+        return self.idx;
     }
 }
 
-
 //REGION Crate Utilities
 #[doc(hidden)]
-fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize) 
-    where
-    B: RangeBounds<usize> {
+fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize)
+where
+    B: RangeBounds<usize>,
+{
     let start = match range.start_bound() {
         std::ops::Bound::Included(first) => *first,
         std::ops::Bound::Excluded(one_before_first) => *one_before_first + 1,
@@ -614,7 +624,7 @@ fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize)
 
 macro_rules! internal {
     ($p:tt) => {
-        unsafe {&mut *$p.internal.get()}
+        unsafe { &mut *$p.internal.get() }
     };
 }
 pub(crate) use internal;

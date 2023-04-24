@@ -1,6 +1,6 @@
 use crate::{
-    extract_true_start_end, internal, AccessError, CellKey, Debug, Deref, DerefMut, RangeBounds,
-    UnsafeCell, Borrow, BorrowMut, mem, NonZeroUsize
+    extract_true_start_end, internal, mem, AccessError, Borrow, BorrowMut, CellKey, Debug, Deref,
+    DerefMut, NonZeroUsize, RangeBounds, UnsafeCell,
 };
 
 //REGION Misc Types
@@ -44,7 +44,7 @@ pub struct Prison<T> {
 impl<T> Prison<T> {
     //FN Prison::new()
     /// Create a new [Prison] with the default allocation strategy ([Vec::new()])
-    /// 
+    ///
     /// Because [Prison] accepts values that may or may not be implement [Copy], [Clone],
     /// or [Default] and because indexes are simply marked as "free" when their values are removed
     /// from the [Prison], a closure must be provided upon creation of a new prison
@@ -84,7 +84,7 @@ impl<T> Prison<T> {
     /// that supplies it default values to replace the removed ones with safely ([mem::replace()])
     /// without running into double-frees or use-after-frees or resorting to things like
     /// [ManuallyDrop](std::mem::ManuallyDrop) or [MaybeUninit](std::mem::MaybeUninit)
-    /// 
+    ///
     /// Because re-allocating the internal [Vec] comes with many restrictions when
     /// accessing references to its elements, it is recommended to use [Prison::with_capacity()]
     /// with a suitable best-guess starting value rather than [Prison::new()]
@@ -365,7 +365,7 @@ impl<T> Prison<T> {
     //FN Prison::visit_mut()
     /// Visit a single value in the [Prison], obtaining a mutable reference to the
     /// value that is passed into a closure you provide.
-    /// 
+    ///
     /// You can only obtain a single mutable reference to an element at any given time, and cannot move the mutable
     /// reference out of the closure, meaning there is only one mutable reference to it at
     /// any time (and zero immutable references).
@@ -431,8 +431,8 @@ impl<T> Prison<T> {
     //FN Prison::visit_ref()
     /// Visit a single value in the [Prison], obtaining an immutable reference to the
     /// value that is passed into a closure you provide.
-    /// 
-    /// You obtain any number of simultaneous immutable references to an element, 
+    ///
+    /// You obtain any number of simultaneous immutable references to an element,
     /// cannot obtain a mutable reference while any immutable references are active,
     /// and cannot move the immutable references out of the closure,
     /// ### Example
@@ -499,9 +499,9 @@ impl<T> Prison<T> {
     //FN Prison::visit_mut_idx()
     /// Visit a single value in the [Prison], obtaining a mutable reference to the
     /// value that is passed into a closure you provide.
-    /// 
+    ///
     /// Similar to `visit_mut()` but ignores the generation counter
-    /// 
+    ///
     /// You can only obtain a single mutable reference to an element at any given time, and cannot move the mutable
     /// reference out of the closure, meaning there is only one mutable reference to it at
     /// any time (and zero immutable references).
@@ -567,10 +567,10 @@ impl<T> Prison<T> {
     //FN Prison::visit_ref_idx()
     /// Visit a single value in the [Prison], obtaining an immutable reference to the
     /// value that is passed into a closure you provide.
-    /// 
+    ///
     /// Similar to `visit_ref()` but ignores the generation counter
-    /// 
-    /// You obtain any number of simultaneous immutable references to an element, 
+    ///
+    /// You obtain any number of simultaneous immutable references to an element,
     /// cannot obtain a mutable reference while any immutable references are active,
     /// and cannot move the immutable references out of the closure,
     /// ### Example
@@ -637,7 +637,7 @@ impl<T> Prison<T> {
     //FN Prison::visit_many_mut()
     /// Visit many values in the [Prison] at the same time, obtaining a mutable reference
     /// to all of them in the same closure and in the same order they were requested.
-    /// 
+    ///
     /// While you can obtain multiple unrelated mutable references simultaneously,
     /// you can only obtain a single mutable reference to the same element at any given time, and cannot move the mutable
     /// reference out of the closure, meaning there is only one mutable reference to it at
@@ -716,7 +716,7 @@ impl<T> Prison<T> {
     //FN Prison::visit_many_ref()
     /// Visit many values in the [Prison] at the same time, obtaining an immutable reference
     /// to all of them in the same closure and in the same order they were requested.
-    /// 
+    ///
     /// As long as the element does not have any mutable references, you can obtain multiple
     /// immutable references to the same element
     /// ### Example
@@ -804,9 +804,9 @@ impl<T> Prison<T> {
     //FN Prison::visit_many_mut_idx()
     /// Visit many values in the [Prison] at the same time, obtaining a mutable reference
     /// to all of them in the same closure and in the same order they were requested.
-    /// 
+    ///
     /// Similar to `visit_many_mut()` but ignores the generation counter
-    /// 
+    ///
     /// While you can obtain multiple unrelated mutable references simultaneously,
     /// you can only obtain a single mutable reference to the same element at any given time, and cannot move the mutable
     /// reference out of the closure, meaning there is only one mutable reference to it at
@@ -888,9 +888,9 @@ impl<T> Prison<T> {
     //FN Prison::visit_many_ref_idx()
     /// Visit many values in the [Prison] at the same time, obtaining an immutable reference
     /// to all of them in the same closure and in the same order they were requested.
-    /// 
+    ///
     /// Similar to `visit_many_ref()` but ignores the generation counter
-    /// 
+    ///
     /// As long as the element does not have any mutable references, you can obtain multiple
     /// immutable references to the same element
     /// ### Example
@@ -1110,7 +1110,7 @@ impl<T> Prison<T> {
     ///
     /// [PrisonValueMut<T>] implements [Deref<Target = T>], [DerefMut<Target = T>], [AsRef<T>], [AsMut<T>],
     /// [Borrow<T>], and [BorrowMut<T>] to allow transparent access to its underlying value
-    /// 
+    ///
     /// As long as the [PrisonValueMut] remains in scope, the element where it's value resides in the
     /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
     /// You can manually drop the [PrisonValueMut] out of scope by passing it as the first parameter
@@ -1165,7 +1165,7 @@ impl<T> Prison<T> {
     ///
     /// [PrisonValueRef<T>] implements [Deref<Target = T>], [AsRef<T>], and
     /// [Borrow<T>] to allow transparent access to its underlying value
-    /// 
+    ///
     /// As long as the [PrisonValueRef] remains in scope, the element where it's value resides in the
     /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
     /// You can manually drop the [PrisonValueRef] out of scope by passing it as the first parameter
@@ -1219,10 +1219,10 @@ impl<T> Prison<T> {
     /// guarding data that automatically frees its reference count it when it goes out of scope.
     ///
     /// Smilar to `guard_mut()` but ignores the generation counter
-    /// 
+    ///
     /// [PrisonValueMut<T>] implements [Deref<Target = T>], [DerefMut<Target = T>], [AsRef<T>], [AsMut<T>],
     /// [Borrow<T>], and [BorrowMut<T>] to allow transparent access to its underlying value
-    /// 
+    ///
     /// As long as the [PrisonValueMut] remains in scope, the element where it's value resides in the
     /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
     /// You can manually drop the [PrisonValueMut] out of scope by passing it as the first parameter
@@ -1274,10 +1274,10 @@ impl<T> Prison<T> {
     /// guarding data that automatically decrements its reference count it when it goes out of scope.
     ///
     /// Similar to `guard_ref()` but ignores the generation counter
-    /// 
+    ///
     /// [PrisonValueRef<T>] implements [Deref<Target = T>], [AsRef<T>], and
     /// [Borrow<T>] to allow transparent access to its underlying value
-    /// 
+    ///
     /// As long as the [PrisonValueRef] remains in scope, the element where it's value resides in the
     /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
     /// You can manually drop the [PrisonValueRef] out of scope by passing it as the first parameter
@@ -1330,7 +1330,7 @@ impl<T> Prison<T> {
     ///
     /// [PrisonSliceMut<T>] implements [Deref<Target = \[&mut T\]>](Deref), [DerefMut<Target = \[&mut T\]>](DerefMut), [AsRef<\[&mut T\]>](AsRef), [AsMut<\[&mut T\]>](AsMut),
     /// [Borrow<\[&mut T\]>](Borrow), and [BorrowMut<\[&mut T\]>](BorrowMut) to allow transparent access to its underlying slice of values
-    /// 
+    ///
     /// As long as the [PrisonSliceMut] remains in scope, the elements where it's values reside in the
     /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
     /// You can manually drop the [PrisonSliceMut] out of scope by passing it as the first parameter
@@ -1392,7 +1392,7 @@ impl<T> Prison<T> {
     ///
     /// [PrisonSliceRef<T>] implements [Deref<Target = \[&T\]>](Deref), [AsRef<\[&T\]>](AsRef),
     /// and [Borrow<\[&T\]>](Borrow), to allow transparent access to its underlying slice of values
-    /// 
+    ///
     /// As long as the [PrisonSliceRef] remains in scope, the elements where it's values reside in the
     /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
     /// You can manually drop the [PrisonSliceRef] out of scope by passing it as the first parameter
@@ -1452,10 +1452,10 @@ impl<T> Prison<T> {
     /// them in guarding data that automatically frees their mutable reference counts when it goes out of range.
     ///
     /// Similar to `guard_many_mut()` but ignores the generation counter
-    /// 
+    ///
     /// [PrisonSliceMut<T>] implements [Deref<Target = \[&mut T\]>](Deref), [DerefMut<Target = \[&mut T\]>](DerefMut), [AsRef<\[&mut T\]>](AsRef), [AsMut<\[&mut T\]>](AsMut),
     /// [Borrow<\[&mut T\]>](Borrow), and [BorrowMut<\[&mut T\]>](BorrowMut) to allow transparent access to its underlying slice of values
-    /// 
+    ///
     /// As long as the [PrisonSliceMut] remains in scope, the elements where it's values reside in the
     /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
     /// You can manually drop the [PrisonSliceMut] out of scope by passing it as the first parameter
@@ -1518,10 +1518,10 @@ impl<T> Prison<T> {
     /// them in guarding data that automatically decreases their immutable reference counts when it goes out of range.
     ///
     /// Similar to `guard_many_ref()` but ignores the generation counter
-    /// 
+    ///
     /// [PrisonSliceRef<T>] implements [Deref<Target = \[&T\]>](Deref), [AsRef<\[&T\]>](AsRef),
     /// and [Borrow<\[&T\]>](Borrow), to allow transparent access to its underlying slice of values
-    /// 
+    ///
     /// As long as the [PrisonSliceRef] remains in scope, the elements where it's values reside in the
     /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
     /// You can manually drop the [PrisonSliceRef] out of scope by passing it as the first parameter
@@ -1701,7 +1701,7 @@ impl<T> Prison<T> {
     /// Clones the requested value out of the [Prison] into a new variable
     ///
     /// Only available when elements of type T implement [Clone] (it is assumed that the implementation of `T::clone()` is memory safe).
-    /// 
+    ///
     /// Because cloning does not alter the original, and because the new variable to hold the clone does not have any presumtions about the value, it
     /// is safe (in a single-threaded context) to clone out the value even if it is being visited or guarded.
     ///
@@ -1750,9 +1750,9 @@ impl<T> Prison<T> {
     /// Clones the requested value out of the [Prison] into a new variable
     ///
     /// Same as `clone_val()` but ignores the generation counter
-    /// 
+    ///
     /// Only available when elements of type T implement [Clone] (it is assumed that the implementation of `T::clone()` is memory safe).
-    /// 
+    ///
     /// Because cloning does not alter the original, and because the new variable to hold the clone does not have any presumtions about the value, it
     /// is safe (in a single-threaded context) to clone out the value even if it is being visited or guarded.
     ///
@@ -1801,7 +1801,7 @@ impl<T> Prison<T> {
     /// Clones the requested values out of the [Prison] into a new [Vec<T>]
     ///
     /// Only available when elements of type T implement [Clone] (it is assumed that the implementation of `T::clone()` is memory safe).
-    /// 
+    ///
     /// Because cloning does not alter the originals, and because the new variables to hold the clones do not have any presumtions about the values, it
     /// is safe (in a single-threaded context) to clone out the values even if they are being visited or guarded.
     ///
@@ -1843,9 +1843,9 @@ impl<T> Prison<T> {
     /// Clones the requested values out of the [Prison] into a new [Vec<T>]
     ///
     /// Same as `clone_many_vals()` but ignores the generation counter
-    /// 
+    ///
     /// Only available when elements of type T implement [Clone] (it is assumed that the implementation of `T::clone()` is memory safe).
-    /// 
+    ///
     /// Because cloning does not alter the originals, and because the new variables to hold the clones do not have any presumtions about the values, it
     /// is safe (in a single-threaded context) to clone out the values even if they are being visited or guarded.
     ///
@@ -1894,8 +1894,6 @@ impl<T> Default for Prison<T> {
 const NO_FREE: usize = usize::MAX;
 const MAX_CAP: usize = isize::MAX as usize;
 
-
-
 //STRUCT PrisonInternal
 #[doc(hidden)]
 #[derive(Debug)]
@@ -1912,20 +1910,20 @@ struct PrisonInternal<T> {
 #[derive(Debug)]
 enum CellOrFree<T> {
     Cell(PrisonCellInternal<T>),
-    Free(FreeCell)
+    Free(FreeCell),
 }
 
 //STRUCT FreeCell
 #[doc(hidden)]
 #[derive(Debug)]
 struct FreeCell {
-    next_free: usize
+    next_free: usize,
 }
 
 //STRUCT PrisonCellInternal
 #[doc(hidden)]
 #[derive(Debug)]
-struct PrisonCellInternal<T>  {
+struct PrisonCellInternal<T> {
     refs: NonZeroUsize,
     gen: usize,
     val: T,
@@ -1957,13 +1955,11 @@ impl<T> Prison<T> {
             if internal.vec.capacity() == MAX_CAP {
                 return Err(AccessError::MaximumCapacityReached);
             }
-            internal.vec.push(CellOrFree::Cell(
-                PrisonCellInternal {
-                    refs: RefCount::ZERO_REFS,
-                    gen: internal.gen,
-                    val,
-                }
-            ));
+            internal.vec.push(CellOrFree::Cell(PrisonCellInternal {
+                refs: RefCount::ZERO_REFS,
+                gen: internal.gen,
+                val,
+            }));
             return Ok(CellKey {
                 idx: internal.vec.len() - 1,
                 gen: internal.gen,
@@ -1984,7 +1980,7 @@ impl<T> Prison<T> {
                     internal.gen = cell.gen + 1;
                 }
             }
-            CellOrFree::Free(free)  => {
+            CellOrFree::Free(free) => {
                 internal.next_free = free.next_free;
                 internal.free -= 1;
             }
@@ -2007,7 +2003,9 @@ impl<T> Prison<T> {
         if idx >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(idx));
         }
-        let new_free = CellOrFree::Free(FreeCell{next_free: internal.next_free});
+        let new_free = CellOrFree::Free(FreeCell {
+            next_free: internal.next_free,
+        });
         match &mut internal.vec[idx] {
             CellOrFree::Cell(cell) if (!use_gen || cell.gen == gen) => {
                 if cell.refs > RefCount::ZERO_REFS {
@@ -2019,23 +2017,27 @@ impl<T> Prison<T> {
                     }
                     internal.gen = cell.gen + 1;
                 }
-            },
-            _ => {
-                return Err(AccessError::ValueDeleted(idx, gen))
-            } 
+            }
+            _ => return Err(AccessError::ValueDeleted(idx, gen)),
         };
         let old_cell = mem::replace(&mut internal.vec[idx], new_free);
         internal.next_free = idx;
         internal.free += 1;
         return match old_cell {
             CellOrFree::Cell(cell) => Ok(cell.val),
-            _ => Err(AccessError::ValueDeleted(idx, gen))
-        }
+            _ => Err(AccessError::ValueDeleted(idx, gen)),
+        };
     }
 
     //FN Prison::add_ref_internal()
     #[doc(hidden)]
-    fn add_ref_internal(&self, idx: usize, gen: usize, use_gen: bool, mutable: bool ) -> Result<(&mut PrisonCellInternal<T>, &mut usize), AccessError> {
+    fn add_ref_internal(
+        &self,
+        idx: usize,
+        gen: usize,
+        use_gen: bool,
+        mutable: bool,
+    ) -> Result<(&mut PrisonCellInternal<T>, &mut usize), AccessError> {
         let internal = internal!(self);
         if idx >= internal.vec.len() {
             return Err(AccessError::IndexOutOfRange(idx));
@@ -2082,7 +2084,7 @@ impl<T> Prison<T> {
                 Ok((cell, _)) => {
                     vals.push(&mut cell.val);
                     refs.push(&mut cell.refs);
-                },
+                }
                 Err(e) => {
                     ref_all_result = Err(e);
                     break;
@@ -2117,7 +2119,7 @@ impl<T> Prison<T> {
                 Ok((cell, _)) => {
                     vals.push(&cell.val);
                     refs.push(&mut cell.refs);
-                },
+                }
                 Err(e) => {
                     ref_all_result = Err(e);
                     break;
@@ -2137,7 +2139,7 @@ impl<T> Prison<T> {
 
     //FN Prison::visit_one_mut_internal()
     #[doc(hidden)]
-    fn visit_one_mut_internal<F> (
+    fn visit_one_mut_internal<F>(
         &self,
         idx: usize,
         gen: usize,
@@ -2155,7 +2157,7 @@ impl<T> Prison<T> {
 
     //FN Prison::visit_one_ref_internal()
     #[doc(hidden)]
-    fn visit_one_ref_internal<F> (
+    fn visit_one_ref_internal<F>(
         &self,
         idx: usize,
         gen: usize,
@@ -2166,7 +2168,7 @@ impl<T> Prison<T> {
         F: FnMut(&T) -> Result<(), AccessError>,
     {
         let (cell, accesses) = self.add_ref_internal(idx, gen, use_gen, false)?;
-        let res = op(& cell.val);
+        let res = op(&cell.val);
         prison_remove_ref_internal(&mut cell.refs, accesses);
         return res;
     }
@@ -2214,7 +2216,10 @@ impl<T> Prison<T> {
         use_gen: bool,
     ) -> Result<PrisonValueMut<'a, T>, AccessError> {
         let (cell, visits) = self.add_ref_internal(idx, gen, use_gen, true)?;
-        return Ok(PrisonValueMut { cell, prison_accesses: visits });
+        return Ok(PrisonValueMut {
+            cell,
+            prison_accesses: visits,
+        });
     }
 
     //FN Prison::guard_ref_internal()
@@ -2226,7 +2231,10 @@ impl<T> Prison<T> {
         use_gen: bool,
     ) -> Result<PrisonValueRef<'a, T>, AccessError> {
         let (cell, visits) = self.add_ref_internal(idx, gen, use_gen, false)?;
-        return Ok(PrisonValueRef { cell, prison_accesses: visits });
+        return Ok(PrisonValueRef {
+            cell,
+            prison_accesses: visits,
+        });
     }
 
     //FN Prison::guard_many_mut_internal()
@@ -2260,7 +2268,6 @@ impl<T> Prison<T> {
     }
 }
 
-
 //FN prison_remove_ref_internal()
 #[doc(hidden)]
 #[inline(always)]
@@ -2288,15 +2295,15 @@ fn prison_remove_many_refs_internal(refs_list: &mut [&mut NonZeroUsize], accesse
 //STRUCT PrisonValueMut
 /// Struct representing a mutable reference to a value that has been allowed to leave the
 /// [Prison] temporarily, but remains guarded by a wrapper to prevent it from leaking or never unlocking
-/// 
+///
 /// [PrisonValueMut<T>] implements [Deref<Target = T>], [DerefMut<Target = T>], [AsRef<T>], [AsMut<T>],
 /// [Borrow<T>], and [BorrowMut<T>] to allow transparent access to its underlying value
-/// 
+///
 /// As long as the [PrisonValueMut] remains in scope, the element where it's value resides in the
 /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
 /// You can manually drop the [PrisonValueMut] out of scope by passing it as the first parameter
 /// to the function [PrisonValueMut::unguard(p_val_mut)]
-/// 
+///
 /// You can obtain a [PrisonValueMut] by calling `guard_mut()` or `guard_mut_idx()` on a [Prison]
 /// ### Example
 /// ```rust
@@ -2323,7 +2330,7 @@ pub struct PrisonValueMut<'a, T> {
 impl<'a, T> PrisonValueMut<'a, T> {
     //FN PrisonValueMut::unguard()
     /// Manually end a [PrisonValueMut] value's temporary guarded absence from the [Prison]
-    /// 
+    ///
     /// This method simply takes ownership of the [PrisonValueMut] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and clearing its mutable reference in the [Prison]
     /// ### Example
@@ -2357,7 +2364,7 @@ impl<'a, T> Deref for PrisonValueMut<'a, T> {
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
@@ -2373,7 +2380,7 @@ impl<'a, T> DerefMut for PrisonValueMut<'a, T> {
 impl<'a, T> AsRef<T> for PrisonValueMut<'a, T> {
     #[inline(always)]
     fn as_ref(&self) -> &T {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
@@ -2389,7 +2396,7 @@ impl<'a, T> AsMut<T> for PrisonValueMut<'a, T> {
 impl<'a, T> Borrow<T> for PrisonValueMut<'a, T> {
     #[inline(always)]
     fn borrow(&self) -> &T {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
@@ -2404,15 +2411,15 @@ impl<'a, T> BorrowMut<T> for PrisonValueMut<'a, T> {
 //STRUCT PrisonValueRef
 /// Struct representing an immutable reference to a value that has been allowed to leave the
 /// [Prison] temporarily, but remains guarded by a wrapper to prevent it from leaking or never unlocking
-/// 
+///
 /// [PrisonValueRef<T>] implements [Deref<Target = T>], [AsRef<T>], and [Borrow<T>]
 /// to allow transparent access to its underlying value
-/// 
+///
 /// As long as the [PrisonValueRef] remains in scope, the element where it's value resides in the
 /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
 /// You can manually drop the [PrisonValueRef] out of scope by passing it as the first parameter
 /// to the function [PrisonValueRef::unguard(p_val_ref)]
-/// 
+///
 /// You can obtain a [PrisonValueRef] by calling `guard_ref()` or `guard_ref_idx()` on a [Prison]
 /// ### Example
 /// ```rust
@@ -2438,7 +2445,7 @@ pub struct PrisonValueRef<'a, T> {
 impl<'a, T> PrisonValueRef<'a, T> {
     //FN PrisonValueRef::unguard()
     /// Manually end a [PrisonValueRef] value's temporary guarded absence from the [Prison]
-    /// 
+    ///
     /// This method simply takes ownership of the [PrisonValueRef] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and decreasing its immutable reference count in the [Prison]
     /// ### Example
@@ -2472,7 +2479,7 @@ impl<'a, T> Deref for PrisonValueRef<'a, T> {
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
@@ -2480,7 +2487,7 @@ impl<'a, T> Deref for PrisonValueRef<'a, T> {
 impl<'a, T> AsRef<T> for PrisonValueRef<'a, T> {
     #[inline(always)]
     fn as_ref(&self) -> &T {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
@@ -2488,22 +2495,22 @@ impl<'a, T> AsRef<T> for PrisonValueRef<'a, T> {
 impl<'a, T> Borrow<T> for PrisonValueRef<'a, T> {
     #[inline(always)]
     fn borrow(&self) -> &T {
-        & self.cell.val
+        &self.cell.val
     }
 }
 
 //STRUCT PrisonSliceMut
 /// Struct representing a slice of mutable references to values that have been allowed to leave the
 /// [Prison] temporarily, but remain guarded by a wrapper to prevent them from leaking or never unlocking
-/// 
+///
 /// [PrisonSliceMut<T>] implements [Deref<Target = \[&mut T\]>](Deref), [DerefMut<Target = \[&mut T\]>](DerefMut), [AsRef<\[&mut T\]>](AsRef), [AsMut<\[&mut T\]>](AsMut),
 /// [Borrow<\[&mut T\]>](Borrow), and [BorrowMut<\[&mut T\]>](BorrowMut) to allow transparent access to its underlying slice of values
-/// 
+///
 /// As long as the [PrisonSliceMut] remains in scope, the elements where it's values reside in the
 /// [Prison] will remain marked as mutably referenced and unable to be referenced a second time.
 /// You can manually drop the [PrisonSliceMut] out of scope by passing it as the first parameter
 /// to the function [PrisonSliceMut::unguard(p_sli_mut)]
-/// 
+///
 /// You can obtain a [PrisonSliceMut] by calling `guard_many_mut()` or `guard_many_mut_idx()` on a [Prison]
 /// ### Example
 /// ```rust
@@ -2533,7 +2540,7 @@ pub struct PrisonSliceMut<'a, T> {
 impl<'a, T> PrisonSliceMut<'a, T> {
     //FN PrisonSliceMut::unguard()
     /// Manually end a [PrisonSliceMut] value's temporary guarded absence from the [Prison]
-    /// 
+    ///
     /// This method simply takes ownership of the [PrisonSliceMut] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and decreasing its immutable reference count in the [Prison]
     /// ### Example
@@ -2613,15 +2620,15 @@ impl<'a, T> BorrowMut<[&'a mut T]> for PrisonSliceMut<'a, T> {
 //STRUCT PrisonSliceRef
 /// Struct representing a slice of immutable references to values that have been allowed to leave the
 /// [Prison] temporarily, but remain guarded by a wrapper to prevent them from leaking or never unlocking
-/// 
+///
 /// [PrisonSliceRef<T>] implements [Deref<Target = \[&T\]>](Deref), [AsRef<\[&T\]>](AsRef),
 /// and [Borrow<\[&T\]>](Borrow) to allow transparent access to its underlying slice of values
-/// 
+///
 /// As long as the [PrisonSliceRef] remains in scope, the elements where it's values reside in the
 /// [Prison] will remain marked as immutably referenced and unable to be mutably referenced.
 /// You can manually drop the [PrisonSliceRef] out of scope by passing it as the first parameter
 /// to the function [PrisonSliceRef::unguard(p_sli_ref)]
-/// 
+///
 /// You can obtain a [PrisonSliceRef] by calling `guard_many_ref()` or `guard_many_ref_idx()` on a [Prison]
 /// ### Example
 /// ```rust
@@ -2644,13 +2651,13 @@ impl<'a, T> BorrowMut<[&'a mut T]> for PrisonSliceMut<'a, T> {
 pub struct PrisonSliceRef<'a, T> {
     prison_accesses: &'a mut usize,
     refs: Vec<&'a mut NonZeroUsize>,
-    vals: Vec<&'a T>
+    vals: Vec<&'a T>,
 }
 
 impl<'a, T> PrisonSliceRef<'a, T> {
     //FN PrisonSliceRef::unguard()
     /// Manually end a [PrisonSliceRef] value's temporary guarded absence from the [Prison]
-    /// 
+    ///
     /// This method simply takes ownership of the [PrisonSliceRef] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and decreasing its immutable reference count in the [Prison]
     /// ### Example
@@ -2707,13 +2714,13 @@ impl<'a, T> Borrow<[&'a T]> for PrisonSliceRef<'a, T> {
 //STRUCT JailCell
 /// Represents a single standalone value that allows interior mutability while upholding memory safety
 /// with a reference counting [usize]
-/// 
+///
 /// This is a very simple implementation of the principles found in [Prison]
-/// 
+///
 /// It has a single [UnsafeCell] to allow interior mutability. The [UnsafeCell] holds
 /// one single [usize] to track mutable and immutable references, and the value itself
 /// of type `T`
-/// 
+///
 /// It has `visit_ref()`, `visit_mut()`, `guard_ref()`, and `guard_mut()` methods, just like [Prison],
 /// but with drastically simpler requirements for safety checking.
 /// ### Example
@@ -2735,18 +2742,21 @@ impl<'a, T> Borrow<[&'a T]> for PrisonSliceRef<'a, T> {
 /// # }
 /// ```
 pub struct JailCell<T> {
-    internal: UnsafeCell<JailCellInternal<T>>
+    internal: UnsafeCell<JailCellInternal<T>>,
 }
 
 impl<T> JailCell<T> {
     //FN JailCell::new()
     /// Creates a new [JailCell] with the supplied value of type `T`
-    /// 
+    ///
     /// After creation, mutable or immutable references to it's value can only be obtained
     /// through its `visit_*()` or `guard_*()` methods
     pub fn new(value: T) -> JailCell<T> {
         return JailCell {
-            internal: UnsafeCell::new(JailCellInternal { refs: RefCount::ZERO_REFS_US, val: value })
+            internal: UnsafeCell::new(JailCellInternal {
+                refs: RefCount::ZERO_REFS_US,
+                val: value,
+            }),
         };
     }
 
@@ -2787,7 +2797,9 @@ impl<T> JailCell<T> {
     /// # }
     /// ```
     pub fn visit_mut<F>(&self, mut operation: F) -> Result<(), AccessError>
-    where F: FnMut(&mut T) -> Result<(), AccessError> {
+    where
+        F: FnMut(&mut T) -> Result<(), AccessError>,
+    {
         let internal = internal!(self);
         internal.add_ref_internal(true)?;
         let result = operation(&mut internal.val);
@@ -2826,7 +2838,9 @@ impl<T> JailCell<T> {
     /// # }
     /// ```
     pub fn visit_ref<F>(&self, mut operation: F) -> Result<(), AccessError>
-    where F: FnMut(&T) -> Result<(), AccessError> {
+    where
+        F: FnMut(&T) -> Result<(), AccessError>,
+    {
         let internal = internal!(self);
         internal.add_ref_internal(false)?;
         let result = operation(&internal.val);
@@ -2837,10 +2851,10 @@ impl<T> JailCell<T> {
     //FN JailCell::guard_mut()
     /// Obtain an [JailValueMut] that marks the [JailCell] mutably referenced as long as it remains
     /// in scope and automatically unlocks it when it falls out of scope
-    /// 
+    ///
     /// [JailValueMut<T>] implements [Deref<Target = T>], [DerefMut<Target = T>], [AsRef<T>], [AsMut<T>],
     /// [Borrow<T>], and [BorrowMut<T>] to allow transparent access to its underlying value
-    /// 
+    ///
     /// You may manually drop the [JailValueMut] out of scope by passing it to the function
     /// [JailValueMut::unguard(_jail_val_mut)]
     /// ### Example
@@ -2877,16 +2891,18 @@ impl<T> JailCell<T> {
     pub fn guard_mut<'a>(&'a self) -> Result<JailValueMut<'a, T>, AccessError> {
         let internal = internal!(self);
         internal.add_ref_internal(true)?;
-        return Ok(JailValueMut{ ref_internal: internal})
+        return Ok(JailValueMut {
+            ref_internal: internal,
+        });
     }
 
     //FN JailCell::guard_ref()
     /// Obtain an [JailValueRef] that marks the [JailCell] mutably referenced as long as it remains
     /// in scope and automatically unlocks it when it falls out of scope
-    /// 
+    ///
     /// [JailValueRef<T>] implements [Deref<Target = T>], [AsRef<T>], and [Borrow<T>]
     /// to allow transparent access to its underlying value
-    /// 
+    ///
     /// You may manually drop the [JailValueRef] out of scope by passing it to the function
     /// [JailValueRef::unguard(_jail_val_ref)]
     /// ### Example
@@ -2918,13 +2934,15 @@ impl<T> JailCell<T> {
     pub fn guard_ref<'a>(&'a self) -> Result<JailValueRef<'a, T>, AccessError> {
         let internal = internal!(self);
         internal.add_ref_internal(false)?;
-        return Ok(JailValueRef{ ref_internal: internal})
+        return Ok(JailValueRef {
+            ref_internal: internal,
+        });
     }
     //FN JailCell::clone_val()
     /// Clones the requested value out of the [JailCell] into a new variable
     ///
     /// Only available when type T implements [Clone] (it is assumed that the implementation of `T::clone()` is memory safe).
-    /// 
+    ///
     /// Because cloning does not alter the original, and because the new variable to hold the clone does not have any presumtions about the value, it
     /// is safe (in a single-threaded context) to clone out the value even if it is being visited or guarded.
     /// ### Example
@@ -2940,16 +2958,20 @@ impl<T> JailCell<T> {
     /// # }
     /// ```
     pub fn clone_val(&self) -> T
-    where T: Clone {
+    where
+        T: Clone,
+    {
         internal!(self).val.clone()
     }
 }
 
 //IMPL Default for JailCell
 impl<T> Default for JailCell<T>
-where T: Default {
+where
+    T: Default,
+{
     fn default() -> Self {
-       Self::new(T::default())
+        Self::new(T::default())
     }
 }
 
@@ -2957,27 +2979,27 @@ where T: Default {
 #[doc(hidden)]
 struct JailCellInternal<T> {
     refs: usize,
-    val: T
+    val: T,
 }
 
 impl<T> JailCellInternal<T> {
     //FN JailCellInternal::add_ref_internal()
     fn add_ref_internal(&mut self, mutable: bool) -> Result<(), AccessError> {
         if self.refs == RefCount::MUT_REF_US {
-            return Err(AccessError::ValueAlreadyMutablyReferenced(0))
+            return Err(AccessError::ValueAlreadyMutablyReferenced(0));
         }
         if mutable && self.refs > RefCount::ZERO_REFS_US {
-            return Err(AccessError::ValueStillImmutablyReferenced(0))
+            return Err(AccessError::ValueStillImmutablyReferenced(0));
         }
         if self.refs == RefCount::MAX_REFS_US {
-            return Err(AccessError::MaximumImmutableReferencesReached(0))
+            return Err(AccessError::MaximumImmutableReferencesReached(0));
         }
         if mutable {
             self.refs = RefCount::MUT_REF_US;
         } else {
             self.refs += 1;
         }
-    return Ok(());
+        return Ok(());
     }
 
     //FN JailCellInternal::remove_ref_internal()
@@ -2993,15 +3015,15 @@ impl<T> JailCellInternal<T> {
 //REGION Guarded JailCell Values
 //STRUCT JailValueMut
 /// A guarded wrapper around a mutable reference to the value contained in a [JailCell]
-/// 
+///
 /// [JailValueMut<T>] implements [Deref<Target = T>], [DerefMut<Target = T>], [AsRef<T>], [AsMut<T>],
 /// [Borrow<T>], and [BorrowMut<T>] to allow transparent access to its underlying value
-/// 
+///
 /// As long as the [JailValueMut] remains in scope, the value in [JailCell] will
 /// remain marked as mutably referenced and unable to be referenced a second time.
 /// You can manually drop the [JailValueMut] out of scope by passing it as the first parameter
 /// to the function [JailValueMut::unguard(jail_val_mut)]
-/// 
+///
 /// You can obtain a [JailValueMut] by calling `guard_mut()` on a [JailCell]
 /// ### Example
 /// ```rust
@@ -3026,7 +3048,7 @@ pub struct JailValueMut<'a, T> {
 impl<'a, T> JailValueMut<'a, T> {
     //FN JailValueMut::unguard()
     /// Manually end a [JailValueMut] value's temporary guarded absence from the [JailCell]
-    /// 
+    ///
     /// This method simply takes ownership of the [JailValueMut] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and clearing its mutable reference in the [JailCell]
     /// ### Example
@@ -3059,7 +3081,7 @@ impl<'a, T> Deref for JailValueMut<'a, T> {
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
 
@@ -3075,7 +3097,7 @@ impl<'a, T> DerefMut for JailValueMut<'a, T> {
 impl<'a, T> AsRef<T> for JailValueMut<'a, T> {
     #[inline(always)]
     fn as_ref(&self) -> &T {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
 
@@ -3091,7 +3113,7 @@ impl<'a, T> AsMut<T> for JailValueMut<'a, T> {
 impl<'a, T> Borrow<T> for JailValueMut<'a, T> {
     #[inline(always)]
     fn borrow(&self) -> &T {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
 
@@ -3105,15 +3127,15 @@ impl<'a, T> BorrowMut<T> for JailValueMut<'a, T> {
 
 //STRUCT JailValueRef
 /// A guarded wrapper around an immutable reference to the value contained in a [JailCell]
-/// 
+///
 /// [JailValueRef<T>] implements [Deref<Target = T>], [AsRef<T>], and [Borrow<T>]
 /// to allow transparent access to its underlying value
-/// 
+///
 /// As long as the [JailValueRef] remains in scope, the value in [JailCell] will
 /// remain marked as immutably referenced and unable to be mutably referenced.
 /// You can manually drop the [JailValueRef] out of scope by passing it as the first parameter
 /// to the function [JailValueRef::unguard(jail_val_ref)]
-/// 
+///
 /// You can obtain a [JailValueRef] by calling `guard_ref()` on a [JailCell]
 /// ### Example
 /// ```rust
@@ -3131,13 +3153,13 @@ impl<'a, T> BorrowMut<T> for JailValueMut<'a, T> {
 /// # }
 /// ```
 pub struct JailValueRef<'a, T> {
-    ref_internal: &'a mut JailCellInternal<T>
+    ref_internal: &'a mut JailCellInternal<T>,
 }
 
 impl<'a, T> JailValueRef<'a, T> {
     //FN JailValueRef::unguard()
     /// Manually end a [JailValueRef] value's temporary guarded absence from the [JailCell]
-    /// 
+    ///
     /// This method simply takes ownership of the [JailValueRef] and immediately lets it go out of scope,
     /// causing it's `drop()` method to be called and decreasing its immutable reference count in the [JailCell]
     /// ### Example
@@ -3170,7 +3192,7 @@ impl<'a, T> Deref for JailValueRef<'a, T> {
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
 
@@ -3178,7 +3200,7 @@ impl<'a, T> Deref for JailValueRef<'a, T> {
 impl<'a, T> AsRef<T> for JailValueRef<'a, T> {
     #[inline(always)]
     fn as_ref(&self) -> &T {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
 
@@ -3186,10 +3208,9 @@ impl<'a, T> AsRef<T> for JailValueRef<'a, T> {
 impl<'a, T> Borrow<T> for JailValueRef<'a, T> {
     #[inline(always)]
     fn borrow(&self) -> &T {
-        & self.ref_internal.val
+        &self.ref_internal.val
     }
 }
-
 
 //REGION Testing
 #[cfg(test)]
@@ -3575,5 +3596,3 @@ mod tests {
     //     assert!(prison.insert(MyNoCopy(99999)).is_ok());
     // }
 }
-
-
