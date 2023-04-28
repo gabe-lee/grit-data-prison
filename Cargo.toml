@@ -12,4 +12,7 @@ categories = ["data-structures", "no-std", "memory-management", "rust-patterns"]
 [dependencies]
 
 [features]
+major_malf_is_err = []
+major_malf_is_panic = []
+major_malf_is_undefined = []
 no_std = []

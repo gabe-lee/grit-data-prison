@@ -23,6 +23,7 @@ those found on a [Vec], how to access the data contained in it, and how it achie
 ### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
 - Version 0.3.x is a breaking api change for 0.2.x and older
+    - Version 0.2.x and older were discovered to have a soft memory leak when using `insert_at()` and `overwrite()`, see [changelog](#changelog)
 - Version 0.2.x is a breaking api change for 0.1.x and older
 See [changelog](#changelog)
 
@@ -227,7 +228,7 @@ let mut accidental_val: u64 = 0;
 let mut grd_0 = prison.guard_mut_idx(0)?;
 prison.visit_ref_idx(3, |val| {
     accidental_val = prison.remove_idx(4)?;
-    prison.insert_at(4, 40);
+    prison.insert(40)?;
     Ok(())
 });
 *grd_0 = 80;
@@ -379,26 +380,27 @@ fn main() -> Result<(), AccessError> {
 (Benchmarks are Coming Soon™)
 
 ### Size
-[Prison<T>](crate::single_threaded::Prison) has 4 [usize] house-keeping values in addition to a [Vec<CellOrFree<T>>]
+[Prison<T>](crate::single_threaded::Prison) has 4 [usize] house-keeping values in addition to a [Vec<PrisonCell<T>>]
 
-Each element in [Vec<CellOrFree<T>>] is Either a `Cell` variant or `Free` variant, but is memory optimized
-to have the same exact size as its largest variant, `Cell`
-- `Free` variant only contains a single [usize], so it is not the limiting variant
-- `Cell` variant contains a [usize] generation counter, a [NonZeroUsize] reference counter to allow `CellOrFree<T>` to use its zero-state as the `Free` variant, and a value of type `T`
+Each `PrisonCell<T>` consists of:
+- A [usize] that tracks whether the cell is `used` or `free` in its most significant bit, and either the `generation` or `prev_free` respectively
+- A [usize] that tracks (depending on `used` or `free`) either the `reference_count` or the `next_free`
+- A value field of type [MaybeUninit<T>] (guaranteed same size as `T`)
 
-Therefore the total _additional_ size compared to a [Vec<T>] on a 64-bit system is
-
-32 bytes flat + 16 bytes per element
+Therefore the total _additional_ size compared to a [Vec<T>] on a 64-bit system is 32 bytes flat + 16 bytes per element,
+and these values are validated in the test suite with a test that checks [mem::size_of](std::mem::size_of) for several
+types of `T`
 
 # How this crate may change in the future
 
-This crate is very much UNSTABLE, meaning that not every error condition may have a test,
+This crate is very much UNSTABLE, meaning that not every error condition may be tested,
 methods may return different errors/values as my understanding of how they should be properly implemented
 evolves, I may add/remove methods altogether, etc.
 
 Possible future additions may include:
 - [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
 - [x] `Guard` api for a more Rust-idiomatic way to access values
+- [x] Switch to reference counting with same memory footprint
 - [ ] More public methods (as long as they make sense and don't bloat the API)
 - [ ] Multi-thread safe `AtomicPrison<T>`
 - [x] ? Single standalone value version, `JailCell<T>`
@@ -414,17 +416,18 @@ The repo is [on github](https://github.com/gabe-lee/grit-data-prison)
 Feel free to leave feedback, or fork/branch the project and submit fixes/optimisations!
 
 If you can give me concrete examples that *definitely* violate memory-safety, meaning
-that the provided mutable references can be made to point to invalid/illegal memory
+that the provided references can be made to point to invalid/illegal memory or violate aliasing rules
 (without the use of additional unsafe :P), or otherwise cause unsafe conditions (for
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
 # Changelog
- - Version 0.3.0: BREAKING change to API:
+ - Version 0.3.0: MAJOR BREAKING change to API:
      - Switch to reference counting instead of [bool] locks: the memory footprint is the *exact* same and the safety logic is almost the same. Reference counting gives more flexibility and finer grained control with no real penalty compared to using a [bool]
      - `escort()` methods renamed to `guard()` methods
      - `visit()` and `guard()` methods split into `_ref()` and `_mut()` variants
-     - [JailCell](crate::single_threaded::JailCell) added
      - [AccessError] variants renamed and changed to be more clear
+     - Addition of 3 crate features: `major_malf_is_err`, `major_malf_is_panic`, `major_malf_is_undefined` that allow conditional compilation choices for behavior that is *certainly* a bug in the library
+     - **Version 0.2.x and older discovered to have a soft memory leak and should be avoided:** when using `insert_at()` and `overwrite()` on indexes that werent the 'top' free in the stack, all other free indexes above them in the stack would be forgotten and never re-used. However, they should be freed when the entire Prison is freed. Sorry! 
  - Version 0.2.3: Non-Breaking feature: `clone_val()` methods to shortcut cloning a value when T implements [Clone]
  - Version 0.2.2: Non-Breaking update to [PrisonValue](crate::single_threaded::PrisonValue) and [PrisonSlice](crate::single_threaded::PrisonSlice) to reduce their memory footprint
  - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
@@ -441,21 +444,22 @@ to be possible), I'd love to fix, further restrict, or rethink the crate entirel
 //REGION Crate Imports
 #[cfg(not(feature = "no_std"))]
 pub(crate) use std::{
-    borrow::{Borrow, BorrowMut},
-    cell::UnsafeCell,
     error::Error,
+    borrow::{Borrow, BorrowMut},
+    hint::unreachable_unchecked,
+    cell::UnsafeCell,
     fmt::{Debug, Display},
-    mem,
-    num::NonZeroUsize,
+    mem::{MaybeUninit, replace as mem_replace},
     ops::{Deref, DerefMut, RangeBounds},
 };
 
 #[cfg(feature = "no_std")]
 pub(crate) use core::{
     borrow::{Borrow, BorrowMut},
+    hint::unreachable_unchecked,
     cell::UnsafeCell,
     fmt::{Debug, Display},
-    num::NonZeroUsize,
+    mem::{MaybeUninit, replace as mem_replace},
     ops::{Deref, DerefMut, RangeBounds},
 };
 
@@ -526,11 +530,36 @@ pub enum AccessError {
     MaximumCapacityReached,
     /// Indicates that you (somehow) reached the limit for reference counting immutable references
     MaximumImmutableReferencesReached(usize),
+    /// Indicates that the operation created an invalid and unexpected state. This may have resulted in memory leaking, mutable aliasing, undefined behavior, etc.
+    /// 
+    /// This error should be considered a BUG inside the library crate `grit-data-prison` and reported to the author of the crate
+    #[allow(non_camel_case_types)]
+    MAJOR_MALFUNCTION(String)
+}
+
+impl AccessError {
+    /// Returns a string that shows the [AccessError] variant and value, if any
+    pub fn kind(&self) -> String {
+        match &*self {
+            Self::IndexOutOfRange(idx) => format!("AccessError::IndexOutOfRange({})", idx),
+            Self::ValueAlreadyMutablyReferenced(idx) => format!("AccessError::ValueAlreadyMutablyReferenced({})", idx),
+            Self::ValueStillImmutablyReferenced(idx) => format!("AccessError::ValueStillImmutablyReferenced({})", idx),
+            Self::InsertAtMaxCapacityWhileAValueIsReferenced => format!("AccessError::InsertAtMaxCapacityWhileAValueIsReferenced"),
+            Self::ValueDeleted(idx, gen) => format!("AccessError::ValueDeleted({}, {})", idx, gen),
+            Self::MaxValueForGenerationReached => format!("AccessError::MaxValueForGenerationReached"),
+            Self::RemoveWhileValueReferenced(idx) => format!("AccessError::RemoveWhileValueReferenced({})", idx),
+            Self::IndexIsNotFree(idx) => format!("AccessError::IndexIsNotFree({})", idx),
+            Self::MaximumCapacityReached => format!("AccessError::MaximumCapacityReached"),
+            Self::MaximumImmutableReferencesReached(idx) => format!("AccessError::MaximumImmutableReferencesReached({})", idx),
+            Self::OverwriteWhileValueReferenced(idx)=> format!("AccessError::OverwriteWhileValueReferenced({})", idx),
+            Self::MAJOR_MALFUNCTION(msg) => format!("AccessError::MAJOR_MALFUNCTION({})", msg),
+        }
+    }
 }
 
 impl Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
+        match &*self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::ValueAlreadyMutablyReferenced(idx) => write!(f, "Value at index [{}] is already being mutably referenced by another operation", idx),
             Self::ValueStillImmutablyReferenced(idx) => write!(f, "Value at index [{}] is still being immutably referenced by another operation, cannot mutably reference", idx),
@@ -541,14 +570,15 @@ impl Display for AccessError {
             Self::IndexIsNotFree(idx) => write!(f, "Index [{}] is not free and may be still in use, cannot overwrite with unrelated value", idx),
             Self::MaximumCapacityReached => write!(f, "Prison has reached the maximum capacity allowed by Rust"),
             Self::MaximumImmutableReferencesReached(idx) => write!(f, "Value at index [{}] has reached the maximum number of immutable references: {}", idx, usize::MAX - 2),
-            Self::OverwriteWhileValueReferenced(idx)=> write!(f, "Value at index [{}] still has active references, cannot overwrite", idx),
+            Self::OverwriteWhileValueReferenced(idx) => write!(f, "Value at index [{}] still has active references, cannot overwrite", idx),
+            Self::MAJOR_MALFUNCTION(msg) => write!(f, "{}\n-------\nIndicates that the operation created an invalid and unexpected state. This may have resulted in memory leaking, mutable aliasing, undefined behavior, etc.", msg),
         }
     }
 }
 
 impl Debug for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
+        match &*self {
             Self::IndexOutOfRange(idx) => write!(f, "Index [{}] is out of range", idx),
             Self::ValueAlreadyMutablyReferenced(idx) => write!(f, "Value at index [{}] is already being mutably referenced by another operation\n---------\nMutably referencing the same cell twice or immutably referencing a value being mutably referenced violates Rust's memory saftey rules", idx),
             Self::ValueStillImmutablyReferenced(idx) => write!(f, "Value at index [{}] is still being immutably referenced by another operation, cannot mutably reference\n---------\nMutably referencing a cell while an immutable reference to it is still in scope violates Rust's memory saftey rules", idx),
@@ -560,6 +590,7 @@ impl Debug for AccessError {
             Self::MaximumCapacityReached => write!(f, "Prison has reached the maximum capacity allowed by Rust\n---------\nRust does not allow a [Vec] to have a capacity longer than [isize::MAX] becuase most operating systems only allow half of the total memory space to be addressed by programs"),
             Self::MaximumImmutableReferencesReached(idx) => write!(f, "Value at index [{}] has reached the maximum number of immutable references: {}\n---------\nThis highly unlikely scenario means you somehow created {} immutable references to the value already", idx, usize::MAX - 2, usize::MAX - 2),
             Self::OverwriteWhileValueReferenced(idx)=> write!(f, "Value at index [{}] still has active references, cannot overwrite\n---------\nOverwriting a value with active references is the same as mutating a variable being immutably referenced, violating Rust's memory safety rules", idx),
+            Self::MAJOR_MALFUNCTION(msg) => write!(f, "{}\n-------\nIndicates that the operation created an invalid and unexpected state. This may have resulted in memory leaking, mutable aliasing, undefined behavior, etc.\n---------\nThis error should be considered a BUG inside the library crate `grit-data-prison` and reported to the author of the crate", msg),
         }
     }
 }
@@ -628,3 +659,18 @@ macro_rules! internal {
     };
 }
 pub(crate) use internal;
+
+macro_rules! major_malfunction {
+    ($MSG:expr) => {
+        if cfg!(feature = "major_malf_is_err") {
+            return Err(AccessError::MAJOR_MALFUNCTION($MSG));
+        } else if cfg!(feature = "major_malf_is_panic") {
+            panic!("{}", $MSG)
+        } else if cfg!(feature = "major_malf_is_undefined") {
+            unsafe { unreachable_unchecked() }
+        } else {
+            return Err(AccessError::MAJOR_MALFUNCTION($MSG));
+        }
+    };
+}
+pub(crate) use major_malfunction;
