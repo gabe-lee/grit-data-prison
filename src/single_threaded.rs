@@ -261,7 +261,7 @@ impl<T> Prison<T> {
                     gen: internal.generation,
                 })
             }
-            _ => major_malfunction!(format!("`Prison` had a recorded `next_free` index ({}) that WAS NOT FREE", new_idx))
+            _ => major_malfunction!("`Prison` had a recorded `next_free` index ({}) that WAS NOT FREE", new_idx)
         }
     }
 
@@ -316,17 +316,17 @@ impl<T> Prison<T> {
                 if prev != IdxD::INVALID {
                     match &mut internal!(self).vec[prev] {
                         prev_free if prev_free.is_free() => prev_free.refs_or_next = free.refs_or_next,
-                        _ => major_malfunction!(format!("a `Free` index ({}) had a `prev_free` that pointed to an index ({}) that WAS NOT FREE", idx, prev))
+                        _ => major_malfunction!("a `Free` index ({}) had a `prev_free` that pointed to an index ({}) that WAS NOT FREE", idx, prev)
                     }
                 } else if internal.next_free == idx {
                     internal.next_free = free.refs_or_next;
                 } else {
-                    major_malfunction!(format!("a `Free` index ({}) had a `prev_free` value that indicated `INVALID`, meaning it should have been the top of the `free` stack, but `Prison.next_free` ({}) did not match its index", prev, internal.next_free))
+                    major_malfunction!("a `Free` index ({}) had a `prev_free` value that indicated `INVALID`, meaning it should have been the top of the `free` stack, but `Prison.next_free` ({}) did not match its index", prev, internal.next_free)
                 }
                 if free.refs_or_next != IdxD::INVALID {
                     match &mut internal!(self).vec[free.refs_or_next] {
                         next_free if next_free.is_free() => next_free.d_gen_or_prev = IdxD::new_type_b(prev),
-                        _ => major_malfunction!(format!("a `Free` index ({}) had a `next_free` that pointed to an index ({}) that WAS NOT FREE", idx, free.refs_or_next))
+                        _ => major_malfunction!("a `Free` index ({}) had a `next_free` that pointed to an index ({}) that WAS NOT FREE", idx, free.refs_or_next)
                     }
                 }
                 internal.free_count -= 1;
@@ -390,17 +390,17 @@ impl<T> Prison<T> {
                 if prev != IdxD::INVALID {
                     match &mut internal!(self).vec[prev] {
                         prev_free if prev_free.is_free() => prev_free.refs_or_next = free.refs_or_next,
-                        _ => major_malfunction!(format!("a `Free` index ({}) had a `prev_free` that pointed to an index ({}) that WAS NOT FREE", idx, prev))
+                        _ => major_malfunction!("a `Free` index ({}) had a `prev_free` that pointed to an index ({}) that WAS NOT FREE", idx, prev)
                     }
                 } else if internal.next_free == idx {
                     internal.next_free = free.refs_or_next;
                 } else {
-                    major_malfunction!(format!("a `free` index ({}) had a `prev_free` value that indicated `INVALID`, meaning it should have been the top of the `free` stack, but `Prison.next_free` ({}) did not match its index", prev, internal.next_free))
+                    major_malfunction!("a `free` index ({}) had a `prev_free` value that indicated `INVALID`, meaning it should have been the top of the `free` stack, but `Prison.next_free` ({}) did not match its index", prev, internal.next_free)
                 }
                 if free.refs_or_next != IdxD::INVALID {
                     match &mut internal!(self).vec[free.refs_or_next] {
                         next_free if next_free.is_free() => next_free.d_gen_or_prev = IdxD::new_type_b(prev),
-                        _ => major_malfunction!(format!("a `Free` index ({}) had a `next_free` that pointed to an index ({}) that WAS NOT FREE", idx, free.refs_or_next))
+                        _ => major_malfunction!("a `Free` index ({}) had a `next_free` that pointed to an index ({}) that WAS NOT FREE", idx, free.refs_or_next)
                     }
                 }
                 internal.free_count -= 1;
@@ -472,7 +472,7 @@ impl<T> Prison<T> {
                 free if free.is_free() => {
                     free.d_gen_or_prev = IdxD::new_type_b(key.idx);
                 },
-                _ => major_malfunction!(format!("the `prison.next_free` index ({}) pointed to an element that WAS NOT FREE", internal.next_free))
+                _ => major_malfunction!("the `prison.next_free` index ({}) pointed to an element that WAS NOT FREE", internal.next_free)
             }
         }
         internal.next_free = key.idx;
@@ -539,6 +539,14 @@ impl<T> Prison<T> {
             }
             _ => return Err(AccessError::ValueDeleted(idx, 0)),
         };
+        if internal.next_free != IdxD::INVALID {
+            match &mut internal.vec[internal.next_free] {
+                free if free.is_free() => {
+                    free.d_gen_or_prev = IdxD::new_type_b(idx);
+                },
+                _ => major_malfunction!("the `prison.next_free` index ({}) pointed to an element that WAS NOT FREE", internal.next_free)
+            }
+        }
         internal.next_free = idx;
         internal.free_count += 1;
         return Ok(removed_val);
@@ -902,10 +910,10 @@ impl<T> Prison<T> {
     /// ```
     pub fn visit_many_mut<F>(&self, keys: &[CellKey], mut operation: F) -> Result<(), AccessError>
     where
-        F: FnMut(&[&mut T]) -> Result<(), AccessError>,
+        F: FnMut(&mut[&mut T]) -> Result<(), AccessError>,
     {
-        let (vals, mut refs, accesses) = self._add_many_mut_refs(keys)?;
-        let result = operation(&vals);
+        let (mut vals, mut refs, accesses) = self._add_many_mut_refs(keys)?;
+        let result = operation(&mut vals);
         _remove_many_mut_refs(&mut refs, accesses);
         return result;
     }
@@ -1076,10 +1084,10 @@ impl<T> Prison<T> {
     /// ```
     pub fn visit_many_mut_idx<F>(&self, indexes: &[usize], mut operation: F) -> Result<(), AccessError>
     where
-        F: FnMut(&[&mut T]) -> Result<(), AccessError>,
+        F: FnMut(&mut[&mut T]) -> Result<(), AccessError>,
     {
-        let (vals, mut refs, accesses) = self._add_many_mut_refs_idx(indexes)?;
-        let result = operation(&vals);
+        let (mut vals, mut refs, accesses) = self._add_many_mut_refs_idx(indexes)?;
+        let result = operation(&mut vals);
         _remove_many_mut_refs(&mut refs, accesses);
         return result;
     }
@@ -1229,10 +1237,10 @@ impl<T> Prison<T> {
     pub fn visit_slice_mut<R, F>(&self, range: R, operation: F) -> Result<(), AccessError>
     where
         R: RangeBounds<usize>,
-        F: FnMut(&[&mut T]) -> Result<(), AccessError>,
+        F: FnMut(&mut[&mut T]) -> Result<(), AccessError>,
     {
         let (start, end) = extract_true_start_end(range, self.vec_len());
-        let idxs: Vec<usize> = (start..end).into_iter().collect();
+        let idxs: Vec<usize> = (start..end).collect();
         self.visit_many_mut_idx(&idxs, operation)
     }
 
@@ -1298,7 +1306,7 @@ impl<T> Prison<T> {
         F: FnMut(&[&T]) -> Result<(), AccessError>,
     {
         let (start, end) = extract_true_start_end(range, self.vec_len());
-        let idxs: Vec<usize> = (start..end).into_iter().collect();
+        let idxs: Vec<usize> = (start..end).collect();
         self.visit_many_ref_idx(&idxs, operation)
     }
 
@@ -3466,7 +3474,7 @@ mod tests {
     //TODO: TEST: Prison::num_used()
     //TODO: TEST: Prison::density()
 
-    //FN TEST: insert()
+    //FN TEST: Prison::insert()
     #[test]
     fn insert() -> Result<(), AccessError> {
         let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
@@ -3500,7 +3508,7 @@ mod tests {
         Ok(())
     }
 
-    //FN TEST: insert_at()
+    //FN TEST: Prison::insert_at()
     #[test]
     fn insert_at() -> Result<(), AccessError> {
         let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
@@ -3547,7 +3555,7 @@ mod tests {
         Ok(())
     }
 
-    //FN TEST: overwrite()
+    //FN TEST: Prison::overwrite()
     #[test]
     fn overwrite() -> Result<(), AccessError> {
         // test `overwrite()` behaves exactly like `insert_at()` when given a free index
@@ -3598,17 +3606,511 @@ mod tests {
         Ok(())
     }
 
-    //TODO: TEST: Prison::remove()
-    //TODO: TEST: Prison::remove_idx()
-    //TODO: TEST: Prison::visit_mut()
-    //TODO: TEST: Prison::visit_ref()
-    //TODO: TEST: Prison::visit_mut_idx()
-    //TODO: TEST: Prison::visit_ref_idx()
-    //TODO: TEST: Prison::visit_many_mut()
+    //FN: TEST: Prison::remove()
+    #[test]
+    fn remove() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        let key_0 = prison.insert(MyNoCopy(0))?;
+        let key_1 = prison.insert(MyNoCopy(1))?;
+        let key_2 = prison.insert(MyNoCopy(2))?;
+        prison.remove(key_0)?;
+        assert_prison_state!(prison, 0, 1, 0, 1, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, IdxD::INVALID);
+        prison.remove(key_1)?;
+        assert_prison_state!(prison, 0, 1, 1, 2, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, 0);
+        assert_free_state!(prison, 0, 1, IdxD::INVALID);
+        prison.remove(key_2)?;
+        assert_free_state!(prison, 2, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 2, 0);
+        assert_free_state!(prison, 0, 1, IdxD::INVALID);
+        assert_prison_state!(prison, 0, 1, 2, 3, 3);
+        let key_0 = prison.insert_at(0, MyNoCopy(10))?;
+        let key_1 = prison.insert_at(1, MyNoCopy(11))?;
+        let key_2 = prison.insert_at(2, MyNoCopy(12))?;
+        assert_prison_state!(prison, 0, 1, IdxD::INVALID, 0, 3);
+        prison.remove(key_2)?;
+        assert_prison_state!(prison, 0, 2, 2, 1, 3);
+        assert_free_state!(prison, 2, IdxD::INVALID, IdxD::INVALID);
+        prison.remove(key_1)?;
+        assert_prison_state!(prison, 0, 2, 1, 2, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, 2);
+        assert_free_state!(prison, 2, 1, IdxD::INVALID);
+        prison.remove(key_0)?;
+        assert_prison_state!(prison, 0, 2, 0, 3, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 0, 2);
+        assert_free_state!(prison, 2, 1, IdxD::INVALID);
+        let key_0 = prison.insert_at(0, MyNoCopy(100))?;
+        let key_1 = prison.insert_at(1, MyNoCopy(110))?;
+        let key_2 = prison.insert_at(2, MyNoCopy(120))?;
+        assert_prison_state!(prison, 0, 2, IdxD::INVALID, 0, 3);
+        prison.remove(key_1)?;
+        assert_prison_state!(prison, 0, 3, 1, 1, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, IdxD::INVALID);
+        prison.remove(key_0)?;
+        assert_prison_state!(prison, 0, 3, 0, 2, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 0, IdxD::INVALID);
+        prison.remove(key_2)?;
+        assert_prison_state!(prison, 0, 3, 2, 3, 3);
+        assert_free_state!(prison, 2, IdxD::INVALID, 0);
+        assert_free_state!(prison, 0, 2, 1);
+        assert_free_state!(prison, 1, 0, IdxD::INVALID);
+        Ok(())
+    }
+
+    //FN: TEST: Prison::remove_idx()
+    #[test]
+    fn remove_idx() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        prison.insert(MyNoCopy(0))?;
+        prison.insert(MyNoCopy(1))?;
+        prison.insert(MyNoCopy(2))?;
+        prison.remove_idx(0)?;
+        assert_prison_state!(prison, 0, 1, 0, 1, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, IdxD::INVALID);
+        prison.remove_idx(1)?;
+        assert_prison_state!(prison, 0, 1, 1, 2, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, 0);
+        assert_free_state!(prison, 0, 1, IdxD::INVALID);
+        prison.remove_idx(2)?;
+        assert_free_state!(prison, 2, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 2, 0);
+        assert_free_state!(prison, 0, 1, IdxD::INVALID);
+        assert_prison_state!(prison, 0, 1, 2, 3, 3);
+        prison.insert_at(0, MyNoCopy(10))?;
+        prison.insert_at(1, MyNoCopy(11))?;
+        prison.insert_at(2, MyNoCopy(12))?;
+        assert_prison_state!(prison, 0, 1, IdxD::INVALID, 0, 3);
+        prison.remove_idx(2)?;
+        assert_prison_state!(prison, 0, 2, 2, 1, 3);
+        assert_free_state!(prison, 2, IdxD::INVALID, IdxD::INVALID);
+        prison.remove_idx(1)?;
+        assert_prison_state!(prison, 0, 2, 1, 2, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, 2);
+        assert_free_state!(prison, 2, 1, IdxD::INVALID);
+        prison.remove_idx(0)?;
+        assert_prison_state!(prison, 0, 2, 0, 3, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 0, 2);
+        assert_free_state!(prison, 2, 1, IdxD::INVALID);
+        prison.insert_at(0, MyNoCopy(100))?;
+        prison.insert_at(1, MyNoCopy(110))?;
+        prison.insert_at(2, MyNoCopy(120))?;
+        assert_prison_state!(prison, 0, 2, IdxD::INVALID, 0, 3);
+        prison.remove_idx(1)?;
+        assert_prison_state!(prison, 0, 3, 1, 1, 3);
+        assert_free_state!(prison, 1, IdxD::INVALID, IdxD::INVALID);
+        prison.remove_idx(0)?;
+        assert_prison_state!(prison, 0, 3, 0, 2, 3);
+        assert_free_state!(prison, 0, IdxD::INVALID, 1);
+        assert_free_state!(prison, 1, 0, IdxD::INVALID);
+        prison.remove_idx(2)?;
+        assert_prison_state!(prison, 0, 3, 2, 3, 3);
+        assert_free_state!(prison, 2, IdxD::INVALID, 0);
+        assert_free_state!(prison, 0, 2, 1);
+        assert_free_state!(prison, 1, 0, IdxD::INVALID);
+        Ok(())
+    }
+
+    //FN: TEST: Prison::visit_mut()
+    #[test]
+    fn visit_mut() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        assert_access_err!(prison.visit_mut(CellKey::from_raw_parts(0, 0), |_| Ok(())), AccessError::IndexOutOfRange(0));
+        let key_0 = prison.insert(MyNoCopy(0))?;
+        let key_1 = prison.insert(MyNoCopy(1))?;
+        let key_2 = prison.insert(MyNoCopy(2))?;
+        prison.visit_mut(key_0, |val_0| {
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(0));
+            assert_eq!(*val_0, MyNoCopy(0));
+            *val_0 = MyNoCopy(10);
+            assert_eq!(*val_0, MyNoCopy(10));
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(10));
+            assert_access_err!(prison.visit_mut(key_0, |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref(key_0, |val_0| {
+            assert_access_err!(prison.visit_mut(key_0, |_| Ok(())), AccessError::ValueStillImmutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_mut(key_0, |val_0| {
+            prison.visit_mut(key_1, |val_1| {
+                prison.visit_mut(key_2, |val_2| {
+                    assert_eq!(*val_0, MyNoCopy(10));
+                    assert_eq!(*val_1, MyNoCopy(1));
+                    assert_eq!(*val_2, MyNoCopy(2));
+                    *val_0 = MyNoCopy(100);
+                    *val_1 = MyNoCopy(200);
+                    *val_2 = MyNoCopy(300);
+                    assert_eq!(*val_0, MyNoCopy(100));
+                    assert_eq!(*val_1, MyNoCopy(200));
+                    assert_eq!(*val_2, MyNoCopy(300));
+                    assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(100));
+                    assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(200));
+                    assert_cell_state!(prison, 2, Refs::MUT, 0, MyNoCopy(300));
+                    Ok(())
+                })?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(100));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(200));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(300));
+        prison.remove(key_0)?;
+        assert_access_err!(prison.visit_mut(key_0, |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        Ok(())
+    }
+
+    //FN: TEST: Prison::visit_ref()
+    #[test]
+    fn visit_ref() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        assert_access_err!(prison.visit_ref(CellKey::from_raw_parts(0, 0), |_| Ok(())), AccessError::IndexOutOfRange(0));
+        let key_0 = prison.insert(MyNoCopy(0))?;
+        let key_1 = prison.insert(MyNoCopy(1))?;
+        let key_2 = prison.insert(MyNoCopy(2))?;
+        prison.visit_ref(key_0, |val_0| {
+            assert_cell_state!(prison, 0, 1, 0, MyNoCopy(0));
+            assert_eq!(*val_0, MyNoCopy(0));
+            Ok(())
+        })?;
+        prison.visit_mut(key_0, |val_0| {
+            assert_access_err!(prison.visit_ref(key_0, |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref(key_0, |val_0| {
+            prison.visit_ref(key_1, |val_1| {
+                prison.visit_ref(key_2, |val_2| {
+                    assert_eq!(*val_0, MyNoCopy(0));
+                    assert_eq!(*val_1, MyNoCopy(1));
+                    assert_eq!(*val_2, MyNoCopy(2));
+                    assert_cell_state!(prison, 0, 1, 0, MyNoCopy(0));
+                    assert_cell_state!(prison, 1, 1, 0, MyNoCopy(1));
+                    assert_cell_state!(prison, 2, 1, 0, MyNoCopy(2));
+                    prison.visit_ref(key_2, |val_2_b| {
+                        assert_cell_state!(prison, 2, 2, 0, MyNoCopy(2));
+                        prison.visit_ref(key_2, |val_2_b| {
+                            assert_cell_state!(prison, 2, 3, 0, MyNoCopy(2));
+                            Ok(())
+                        })?;
+                        assert_cell_state!(prison, 2, 2, 0, MyNoCopy(2));
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(0));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(1));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(2));
+        prison.remove(key_0)?;
+        assert_access_err!(prison.visit_ref(key_0, |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        internal!(prison).vec[1].refs_or_next = Refs::MAX_IMMUT;
+        assert_access_err!(prison.visit_ref(key_1, |_| Ok(())), AccessError::MaximumImmutableReferencesReached(1));
+        Ok(())
+    }
+    
+    //FN: TEST: Prison::visit_mut_idx()
+    #[test]
+    fn visit_mut_idx() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        assert_access_err!(prison.visit_mut_idx(0, |_| Ok(())), AccessError::IndexOutOfRange(0));
+        prison.insert(MyNoCopy(0))?;
+        prison.insert(MyNoCopy(1))?;
+        prison.insert(MyNoCopy(2))?;
+        prison.visit_mut_idx(0, |val_0| {
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(0));
+            assert_eq!(*val_0, MyNoCopy(0));
+            *val_0 = MyNoCopy(10);
+            assert_eq!(*val_0, MyNoCopy(10));
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(10));
+            assert_access_err!(prison.visit_mut_idx(0, |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref_idx(0, |val_0| {
+            assert_access_err!(prison.visit_mut_idx(0, |_| Ok(())), AccessError::ValueStillImmutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_mut_idx(0, |val_0| {
+            prison.visit_mut_idx(1, |val_1| {
+                prison.visit_mut_idx(2, |val_2| {
+                    assert_eq!(*val_0, MyNoCopy(10));
+                    assert_eq!(*val_1, MyNoCopy(1));
+                    assert_eq!(*val_2, MyNoCopy(2));
+                    *val_0 = MyNoCopy(100);
+                    *val_1 = MyNoCopy(200);
+                    *val_2 = MyNoCopy(300);
+                    assert_eq!(*val_0, MyNoCopy(100));
+                    assert_eq!(*val_1, MyNoCopy(200));
+                    assert_eq!(*val_2, MyNoCopy(300));
+                    assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(100));
+                    assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(200));
+                    assert_cell_state!(prison, 2, Refs::MUT, 0, MyNoCopy(300));
+                    Ok(())
+                })?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(100));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(200));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(300));
+        prison.remove_idx(0)?;
+        assert_access_err!(prison.visit_mut_idx(0, |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        Ok(())
+    }
+
+    //FN: TEST: Prison::visit_ref_idx()
+    #[test]
+    fn visit_ref_idx() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(3);
+        assert_access_err!(prison.visit_ref(CellKey::from_raw_parts(0, 0), |_| Ok(())), AccessError::IndexOutOfRange(0));
+        prison.insert(MyNoCopy(0))?;
+        prison.insert(MyNoCopy(1))?;
+        prison.insert(MyNoCopy(2))?;
+        prison.visit_ref_idx(0, |val_0| {
+            assert_cell_state!(prison, 0, 1, 0, MyNoCopy(0));
+            assert_eq!(*val_0, MyNoCopy(0));
+            Ok(())
+        })?;
+        prison.visit_mut_idx(0, |val_0| {
+            assert_access_err!(prison.visit_ref_idx(0, |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref_idx(0, |val_0| {
+            prison.visit_ref_idx(1, |val_1| {
+                prison.visit_ref_idx(2, |val_2| {
+                    assert_eq!(*val_0, MyNoCopy(0));
+                    assert_eq!(*val_1, MyNoCopy(1));
+                    assert_eq!(*val_2, MyNoCopy(2));
+                    assert_cell_state!(prison, 0, 1, 0, MyNoCopy(0));
+                    assert_cell_state!(prison, 1, 1, 0, MyNoCopy(1));
+                    assert_cell_state!(prison, 2, 1, 0, MyNoCopy(2));
+                    prison.visit_ref_idx(2, |val_2_b| {
+                        assert_cell_state!(prison, 2, 2, 0, MyNoCopy(2));
+                        prison.visit_ref_idx(2, |val_2_b| {
+                            assert_cell_state!(prison, 2, 3, 0, MyNoCopy(2));
+                            Ok(())
+                        })?;
+                        assert_cell_state!(prison, 2, 2, 0, MyNoCopy(2));
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(0));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(1));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(2));
+        prison.remove_idx(0)?;
+        assert_access_err!(prison.visit_ref_idx(0, |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        internal!(prison).vec[1].refs_or_next = Refs::MAX_IMMUT;
+        assert_access_err!(prison.visit_ref_idx(1, |_| Ok(())), AccessError::MaximumImmutableReferencesReached(1));
+        Ok(())
+    }
+
+    //FN: TEST: Prison::visit_many_mut()
+    #[test]
+    fn visit_many_mut() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(5);
+        assert_access_err!(prison.visit_many_mut(&[CellKey::from_raw_parts(0, 0)], |_| Ok(())), AccessError::IndexOutOfRange(0));
+        assert!(prison.visit_many_mut(&[], |_| Ok(())).is_ok());
+        let key_0 = prison.insert(MyNoCopy(0))?;
+        let key_1 = prison.insert(MyNoCopy(1))?;
+        let key_2 = prison.insert(MyNoCopy(2))?;
+        let key_3 = prison.insert(MyNoCopy(3))?;
+        let key_4 = prison.insert(MyNoCopy(4))?;
+        prison.visit_many_mut(&[key_0, key_1], |vals_0_1| {
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(0));
+            assert_eq!(*vals_0_1[0], MyNoCopy(0));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(1));
+            assert_eq!(*vals_0_1[1], MyNoCopy(1));
+            *vals_0_1[0] = MyNoCopy(10);
+            *vals_0_1[1] = MyNoCopy(11);
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(10));
+            assert_eq!(*vals_0_1[0], MyNoCopy(10));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(11));
+            assert_eq!(*vals_0_1[1], MyNoCopy(11));
+            assert_access_err!(prison.visit_many_mut(&[key_0], |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref(key_0, |val_0| {
+            assert_access_err!(prison.visit_many_mut(&[key_0, key_1], |_| Ok(())), AccessError::ValueStillImmutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_many_mut(&[key_0,key_2,key_4], |vals_0_2_4| {
+            prison.visit_many_mut(&[key_1,key_3], |vals_1_3| {
+                assert_eq!(*vals_0_2_4[0], MyNoCopy(10));
+                assert_eq!(*vals_1_3[0], MyNoCopy(11));
+                assert_eq!(*vals_0_2_4[1], MyNoCopy(2));
+                assert_eq!(*vals_1_3[1], MyNoCopy(3));
+                assert_eq!(*vals_0_2_4[2], MyNoCopy(4));
+                *vals_0_2_4[0] = MyNoCopy(100);
+                *vals_1_3[0] = MyNoCopy(200);
+                *vals_0_2_4[1] = MyNoCopy(300);
+                *vals_1_3[1] = MyNoCopy(400);
+                *vals_0_2_4[2] = MyNoCopy(500);
+                assert_eq!(*vals_0_2_4[0], MyNoCopy(100));
+                assert_eq!(*vals_1_3[0], MyNoCopy(200));
+                assert_eq!(*vals_0_2_4[1], MyNoCopy(300));
+                assert_eq!(*vals_1_3[1], MyNoCopy(400));
+                assert_eq!(*vals_0_2_4[2], MyNoCopy(500));
+                assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(100));
+                assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(200));
+                assert_cell_state!(prison, 2, Refs::MUT, 0, MyNoCopy(300));
+                assert_cell_state!(prison, 3, Refs::MUT, 0, MyNoCopy(400));
+                assert_cell_state!(prison, 4, Refs::MUT, 0, MyNoCopy(500));
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(100));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(200));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(300));
+        assert_cell_state!(prison, 3, 0, 0, MyNoCopy(400));
+        assert_cell_state!(prison, 4, 0, 0, MyNoCopy(500));
+        prison.remove(key_0)?;
+        assert_access_err!(prison.visit_many_mut(&[key_0], |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        Ok(())
+    }
+
     //TODO: TEST: Prison::visit_many_ref()
-    //TODO: TEST: Prison::visit_many_mut_idx()
+    //FN: TEST: Prison::visit_many_mut_idx()
+    #[test]
+    fn visit_many_mut_idx() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(5);
+        assert_access_err!(prison.visit_many_mut_idx(&[0], |_| Ok(())), AccessError::IndexOutOfRange(0));
+        assert!(prison.visit_many_mut_idx(&[], |_| Ok(())).is_ok());
+        prison.insert(MyNoCopy(0))?;
+        prison.insert(MyNoCopy(1))?;
+        prison.insert(MyNoCopy(2))?;
+        prison.insert(MyNoCopy(3))?;
+        prison.insert(MyNoCopy(4))?;
+        prison.visit_many_mut_idx(&[0, 1], |vals_0_1| {
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(0));
+            assert_eq!(*vals_0_1[0], MyNoCopy(0));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(1));
+            assert_eq!(*vals_0_1[1], MyNoCopy(1));
+            *vals_0_1[0] = MyNoCopy(10);
+            *vals_0_1[1] = MyNoCopy(11);
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(10));
+            assert_eq!(*vals_0_1[0], MyNoCopy(10));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(11));
+            assert_eq!(*vals_0_1[1], MyNoCopy(11));
+            assert_access_err!(prison.visit_many_mut_idx(&[0], |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref_idx(0, |val_0| {
+            assert_access_err!(prison.visit_many_mut_idx(&[0, 1], |_| Ok(())), AccessError::ValueStillImmutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_many_mut_idx(&[0,2,4], |vals_0_2_4| {
+            prison.visit_many_mut_idx(&[1,3], |vals_1_3| {
+                assert_eq!(*vals_0_2_4[0], MyNoCopy(10));
+                assert_eq!(*vals_1_3[0], MyNoCopy(11));
+                assert_eq!(*vals_0_2_4[1], MyNoCopy(2));
+                assert_eq!(*vals_1_3[1], MyNoCopy(3));
+                assert_eq!(*vals_0_2_4[2], MyNoCopy(4));
+                *vals_0_2_4[0] = MyNoCopy(100);
+                *vals_1_3[0] = MyNoCopy(200);
+                *vals_0_2_4[1] = MyNoCopy(300);
+                *vals_1_3[1] = MyNoCopy(400);
+                *vals_0_2_4[2] = MyNoCopy(500);
+                assert_eq!(*vals_0_2_4[0], MyNoCopy(100));
+                assert_eq!(*vals_1_3[0], MyNoCopy(200));
+                assert_eq!(*vals_0_2_4[1], MyNoCopy(300));
+                assert_eq!(*vals_1_3[1], MyNoCopy(400));
+                assert_eq!(*vals_0_2_4[2], MyNoCopy(500));
+                assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(100));
+                assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(200));
+                assert_cell_state!(prison, 2, Refs::MUT, 0, MyNoCopy(300));
+                assert_cell_state!(prison, 3, Refs::MUT, 0, MyNoCopy(400));
+                assert_cell_state!(prison, 4, Refs::MUT, 0, MyNoCopy(500));
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(100));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(200));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(300));
+        assert_cell_state!(prison, 3, 0, 0, MyNoCopy(400));
+        assert_cell_state!(prison, 4, 0, 0, MyNoCopy(500));
+        prison.remove_idx(0)?;
+        assert_access_err!(prison.visit_many_mut_idx(&[0], |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        Ok(())
+    }
     //TODO: TEST: Prison::visit_many_ref_idx()
-    //TODO: TEST: Prison::visit_slice_mut()
+    //FN: TEST: Prison::visit_slice_mut()
+    #[test]
+    fn visit_slice_mut() -> Result<(), AccessError> {
+        let prison: Prison<MyNoCopy> = Prison::with_capacity(5);
+        assert_access_err!(prison.visit_slice_mut(0..1, |_| Ok(())), AccessError::IndexOutOfRange(0));
+        assert!(prison.visit_slice_mut(.., |_| Ok(())).is_ok());
+        prison.insert(MyNoCopy(0))?;
+        prison.insert(MyNoCopy(1))?;
+        prison.insert(MyNoCopy(2))?;
+        prison.insert(MyNoCopy(3))?;
+        prison.insert(MyNoCopy(4))?;
+        prison.visit_slice_mut(0..=1, |vals_0_1| {
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(0));
+            assert_eq!(*vals_0_1[0], MyNoCopy(0));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(1));
+            assert_eq!(*vals_0_1[1], MyNoCopy(1));
+            *vals_0_1[0] = MyNoCopy(10);
+            *vals_0_1[1] = MyNoCopy(11);
+            assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(10));
+            assert_eq!(*vals_0_1[0], MyNoCopy(10));
+            assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(11));
+            assert_eq!(*vals_0_1[1], MyNoCopy(11));
+            assert_access_err!(prison.visit_slice_mut(0..1, |_| Ok(())), AccessError::ValueAlreadyMutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_ref_idx(0, |val_0| {
+            assert_access_err!(prison.visit_slice_mut(0..1, |_| Ok(())), AccessError::ValueStillImmutablyReferenced(0));
+            Ok(())
+        })?;
+        prison.visit_slice_mut(..3, |vals_0_1_2| {
+            prison.visit_slice_mut(3.., |vals_3_4| {
+                assert_eq!(*vals_0_1_2[0], MyNoCopy(10));
+                assert_eq!(*vals_0_1_2[1], MyNoCopy(11));
+                assert_eq!(*vals_0_1_2[2], MyNoCopy(2));
+                assert_eq!(*vals_3_4[0], MyNoCopy(3));
+                assert_eq!(*vals_3_4[1], MyNoCopy(4));
+                *vals_0_1_2[0] = MyNoCopy(100);
+                *vals_0_1_2[1] = MyNoCopy(200);
+                *vals_0_1_2[2] = MyNoCopy(300);
+                *vals_3_4[0] = MyNoCopy(400);
+                *vals_3_4[1] = MyNoCopy(500);
+                assert_eq!(*vals_0_1_2[0], MyNoCopy(100));
+                assert_eq!(*vals_0_1_2[1], MyNoCopy(200));
+                assert_eq!(*vals_0_1_2[2], MyNoCopy(300));
+                assert_eq!(*vals_3_4[0], MyNoCopy(400));
+                assert_eq!(*vals_3_4[1], MyNoCopy(500));
+                assert_cell_state!(prison, 0, Refs::MUT, 0, MyNoCopy(100));
+                assert_cell_state!(prison, 1, Refs::MUT, 0, MyNoCopy(200));
+                assert_cell_state!(prison, 2, Refs::MUT, 0, MyNoCopy(300));
+                assert_cell_state!(prison, 3, Refs::MUT, 0, MyNoCopy(400));
+                assert_cell_state!(prison, 4, Refs::MUT, 0, MyNoCopy(500));
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        assert_cell_state!(prison, 0, 0, 0, MyNoCopy(100));
+        assert_cell_state!(prison, 1, 0, 0, MyNoCopy(200));
+        assert_cell_state!(prison, 2, 0, 0, MyNoCopy(300));
+        assert_cell_state!(prison, 3, 0, 0, MyNoCopy(400));
+        assert_cell_state!(prison, 4, 0, 0, MyNoCopy(500));
+        prison.remove_idx(0)?;
+        assert_access_err!(prison.visit_slice_mut(.., |_| Ok(())), AccessError::ValueDeleted(0, 0));
+        Ok(())
+    }
     //TODO: TEST: Prison::visit_slice_ref()
     //TODO: TEST: Prison::guard_mut()
     //TODO: TEST: Prison::guard_ref()

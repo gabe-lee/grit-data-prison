@@ -7,9 +7,10 @@ obtain a guarded mutable reference to the value.
 This documentation describes the usage of [Prison<T>](crate::single_threaded::Prison), how its methods differ from
 those found on a [Vec], how to access the data contained in it, and how it achieves memory safety.
 
-[On: Crates.io](https://crates.io/crates/grit-data-prison)
-[On: Github](https://github.com/gabe-lee/grit-data-prison)
-[On: Docs.rs](https://docs.rs/grit-data-prison/0.2.3/grit_data_prison/)
+### Project Links
+grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)
+grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)
+grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_prison/)
 
 ### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
@@ -23,8 +24,7 @@ those found on a [Vec], how to access the data contained in it, and how it achie
 ### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
 - Version 0.3.x is a breaking api change for 0.2.x and older
-    - Version 0.2.x and older were discovered to have a soft memory leak when using `insert_at()` and `overwrite()`, see [changelog](#changelog)
-- Version 0.2.x is a breaking api change for 0.1.x and older
+- ALSO: Version 0.2.x and older were discovered to have a soft memory leak when using `insert_at()` and `overwrite()`, see [changelog](#changelog) for details
 See [changelog](#changelog)
 
 # Motivation
@@ -661,15 +661,15 @@ macro_rules! internal {
 pub(crate) use internal;
 
 macro_rules! major_malfunction {
-    ($MSG:expr) => {
+    ($MSG:literal, $($VAR:expr),*) => {
         if cfg!(feature = "major_malf_is_err") {
-            return Err(AccessError::MAJOR_MALFUNCTION($MSG));
+            return Err(AccessError::MAJOR_MALFUNCTION(format!($MSG, $($VAR,)*)));
         } else if cfg!(feature = "major_malf_is_panic") {
-            panic!("{}", $MSG)
+            panic!($MSG, $($VAR,)*)
         } else if cfg!(feature = "major_malf_is_undefined") {
             unsafe { unreachable_unchecked() }
         } else {
-            return Err(AccessError::MAJOR_MALFUNCTION($MSG));
+            return Err(AccessError::MAJOR_MALFUNCTION(format!($MSG, $($VAR,)*)));
         }
     };
 }
