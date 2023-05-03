@@ -1,5 +1,6 @@
 //REGION MAIN DOCUMENTATION
-/*!This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure
+/*! ![Image](https://img.shields.io/badge/coverage-90.67%25-green) ![Image](https://img.shields.io/badge/unit%20tests-34%20pass%20%7C%200%20fail%20%7C%201%20ignore-brightgreen) ![Image](https://img.shields.io/badge/doc%20tests-100%20pass%20%7C%200%20fail-brightgreen) ![Image](https://img.shields.io/badge/dependencies-none-brightgreen) ![Image](https://img.shields.io/badge/license-BSD--3--Clause-informational)  
+This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure
 that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
 that take closures that are passed mutable references to the values, or by using the `.guard()` methods to
 obtain a guarded mutable reference to the value.
@@ -8,9 +9,9 @@ This documentation describes the usage of [Prison<T>](crate::single_threaded::Pr
 those found on a [Vec], how to access the data contained in it, and how it achieves memory safety.
 
 ### Project Links
-grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)
-grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)
-grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_prison/)
+grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)  
+grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)  
+grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_prison/)  
 
 ### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
@@ -22,11 +23,9 @@ grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_p
 - All methods return an [AccessError] where the scenario would cause a panic if not caught
 
 ### NOTE
-This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone
+This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone, see [changelog](#changelog)
 - Version 0.3.x is a breaking api change for 0.2.x and older
 - ALSO: Version 0.2.x and older were discovered to have a soft memory leak when using `insert_at()` and `overwrite()`, see [changelog](#changelog) for details
-See [changelog](#changelog)
-
 # Motivation
 
 I wanted a data structure that met these criteria:
@@ -180,7 +179,7 @@ also implement [DerefMut], [AsMut], and [BorrowMut] to provide transparent acces
     let grd_world = prison.guard_ref_idx(1)?;
     println!("{}{}", *grd_hello, *grd_world); // Prints "Hello, World!"
 }
-// block ends, both guards go out of scope and their reference countes return to what they were before
+// block ends, both guards go out of scope and their reference counts return to what they were before
 let mut grd_world_to_rust = prison.guard_mut_idx(1)?;
 *grd_world_to_rust = String::from("Rust!!");
 PrisonValueMut::unguard(grd_world_to_rust); // index one is no longer marked mutably referenced
@@ -202,7 +201,7 @@ fn main() -> Result<(), AccessError> {
         let grd_world = prison.guard_ref_idx(1)?;
         println!("{}{}", *grd_hello, *grd_world); // Prints "Hello, World!"
     }
-    // block ends, both guards go out of scope and their reference countes return to what they were before
+    // block ends, both guards go out of scope and their reference counts return to what they were before
     let mut grd_world_to_rust = prison.guard_mut_idx(1)?;
     *grd_world_to_rust = String::from("Rust!!");
     PrisonValueMut::unguard(grd_world_to_rust); // index one is no longer marked mutably referenced
@@ -315,12 +314,16 @@ In addition, it provides the functionality of a Generational Arena with these ad
 It achieves all of the above with a few lightweight sentinel values:
 - A single [UnsafeCell](std::cell::UnsafeCell) to hold *all* of the [Prison](crate::single_threaded::Prison) internals and provide interior mutability
 - A master `access_count` [usize] on [Prison](crate::single_threaded::Prison) itself to track whether *any* reference is in active
-- Each element is either a `Cell` or `Free` variant:
-    - A `Free` simply contains the value of the *next* free index after this one is filled
-    - A `ref_count` [usize] on each `Cell` that tracks both mutable and immutable references
-    - A `generation` [usize] on each `Cell` to use when matching to the [CellKey] used to access the index
+- Each element is (basically) a `Cell` or `Free` variant:
+    - `Free` elements act as nodes in a doubly linked list that tracks free indexes
+        - One [usize] that points to the previous free index before this one was made free
+        - One [usize] that points to the next free index after this one is filled
+    - `Cell`
+        - A `ref_count` [usize] that tracks both mutable and immutable references
+        - A `generation` [usize] to use when matching to the [CellKey] used to access the index
+        - A value of type `T`
 
-(see [performance](#performance) for more info on specifics)
+(see [performance](#performance) for more info on the *actual* specifics)
 
 Attempting to perform an action that would violate any of these rules will either be prevented from compiling
 or return an [AccessError] that describes why it was an error, and should never panic.
@@ -374,6 +377,14 @@ fn main() -> Result<(), AccessError> {
     Ok(())
 }
 ```
+# Crate Features
+`no_std`: This crate can be used with the `no_std` feature to use only imports from the `core` library instead of the `std` library
+
+Major Malfunctions:  
+this crate can be passed one of three (optional) features that define how the library handles behavior that is DEFINITELY un-intended and should be considered a bug in the library itself. It defaults to `major_malf_is_err` if none are specified:
+- `major_malf_is_err`: major malfunctions will be returned as an [AccessError::MAJOR_MALFUNCTION(msg)], this is the default even if not specified
+- `major_malf_is_panic`: major malfunctions will result in a call to `panic(msg)` describing the unexpected behavior
+- `major_malf_is_undefined`: branches where a major malfunction would nomally be are replaced with [unreachable_unchecked()], possibly allowing them to be removed from compilation entirely
 # Performance
 
 ### Speed
@@ -382,13 +393,17 @@ fn main() -> Result<(), AccessError> {
 ### Size
 [Prison<T>](crate::single_threaded::Prison) has 4 [usize] house-keeping values in addition to a [Vec<PrisonCell<T>>]
 
-Each `PrisonCell<T>` consists of:
-- A [usize] that tracks whether the cell is `used` or `free` in its most significant bit, and either the `generation` or `prev_free` respectively
-- A [usize] that tracks (depending on `used` or `free`) either the `reference_count` or the `next_free`
-- A value field of type [MaybeUninit<T>] (guaranteed same size as `T`)
+Although the abstract of each `PrisonCell<T>` is as described as found in [How is This Safe?!](#how-is-this-safe),
+the truth of the matter it that Rust was not optimising the memory footprint where it could have done so using Enums, so I had to roll my own
+type of enum:
+- Each element is a struct with a custom-enforced a `Cell` or `Free` variant, with the variant tracked in the top bit of one of its fields:
+    - field `refs_or_next` holds a [usize] that holds either the reference count in `Cell` variant or the next free in `Free` variant
+    - field `d_gen_or_prev` holds a [usize] that holds either the generation count in `Cell` variant or the prev free in `Free` variant
+        - In addition, the most significant bit of `d_gen_or_prev` is reserved for marking the variant of the `PrisonCell` (the `d` is for `discriminant`). This means the *ACTUAL* maximum generation count is [isize::MAX](std::isize::MAX), but the prev index is unafected because a [Vec] cannot have more than [isize::MAX](std::isize::MAX) elements anyway...
+    - field `val` is a [`MaybeUninit<T>`] that is always assumed uninitialized when the element is in `Free` state, and always assumed initialized when it is in `Cell` state.
 
 Therefore the total _additional_ size compared to a [Vec<T>] on a 64-bit system is 32 bytes flat + 16 bytes per element,
-and these values are validated in the test suite with a test that checks [mem::size_of](std::mem::size_of) for several
+and these values are validated in the test suite with an optional test that checks [mem::size_of](std::mem::size_of) for several
 types of `T`
 
 # How this crate may change in the future
@@ -403,7 +418,7 @@ Possible future additions may include:
 - [x] Switch to reference counting with same memory footprint
 - [ ] More public methods (as long as they make sense and don't bloat the API)
 - [ ] Multi-thread safe `AtomicPrison<T>`
-- [x] ? Single standalone value version, `JailCell<T>`
+- [x] ? Single standalone value version, [JailCell<T>](crate::single_threaded::JailCell)
 - [ ] ? Multi-thread safe standalone value version, `AtomicJailCell<T>`
 - [ ] ?? Completely unchecked and unsafe version `UnPrison<T>`
 - [ ] ??? Multi-thread ~~safe~~ unsafe version `AtomicUnPrison<T>`
@@ -417,19 +432,26 @@ Feel free to leave feedback, or fork/branch the project and submit fixes/optimis
 
 If you can give me concrete examples that *definitely* violate memory-safety, meaning
 that the provided references can be made to point to invalid/illegal memory or violate aliasing rules
-(without the use of additional unsafe :P), or otherwise cause unsafe conditions (for
+(without the use of additional unsafe :P), leak memory, or otherwise cause unsafe conditions (for
 example changing an expected enum variant to another where the compiler doesnt expect it
 to be possible), I'd love to fix, further restrict, or rethink the crate entirely.
+
+The best way to do this would be to follow these steps:
+- make a `bug/something` or `issue/something` branch off of the `dev` branch
+- create a new test that demonstrates the current failing of the library
+- then do one of the following:
+    - solve the problem in your branch and create a pull request into the `dev` branch with a message explaining everything
+    - create a pull request with only the test proving the failure point with a message describing why it is a failure and that *this pull request does not solve the problem*
 # Changelog
  - Version 0.3.0: MAJOR BREAKING change to API:
-     - Switch to reference counting instead of [bool] locks: the memory footprint is the *exact* same and the safety logic is almost the same. Reference counting gives more flexibility and finer grained control with no real penalty compared to using a [bool]
+     - Switch to reference counting instead of [bool] locks: the memory footprint is the same (in most cases) and the safety logic is almost the same. Reference counting gives more flexibility and finer grained control with no real penalty compared to using a [bool]
      - `escort()` methods renamed to `guard()` methods
      - `visit()` and `guard()` methods split into `_ref()` and `_mut()` variants
      - [AccessError] variants renamed and changed to be more clear
      - Addition of 3 crate features: `major_malf_is_err`, `major_malf_is_panic`, `major_malf_is_undefined` that allow conditional compilation choices for behavior that is *certainly* a bug in the library
      - **Version 0.2.x and older discovered to have a soft memory leak and should be avoided:** when using `insert_at()` and `overwrite()` on indexes that werent the 'top' free in the stack, all other free indexes above them in the stack would be forgotten and never re-used. However, they should be freed when the entire Prison is freed. Sorry! 
  - Version 0.2.3: Non-Breaking feature: `clone_val()` methods to shortcut cloning a value when T implements [Clone]
- - Version 0.2.2: Non-Breaking update to [PrisonValue](crate::single_threaded::PrisonValue) and [PrisonSlice](crate::single_threaded::PrisonSlice) to reduce their memory footprint
+ - Version 0.2.2: Non-Breaking update to `PrisonValue` and `PrisonSlice` to reduce their memory footprint
  - Version 0.2.1: Non-breaking addition of `escort()` api function (why didnt I think of this earlier?)
  - Version 0.2.x: has a different API than version 0.1.x and is a move from a plain Vec to a Generational Arena
  - Version 0.1.x: first version, plain old [Vec] with [usize] indexing
@@ -437,6 +459,7 @@ to be possible), I'd love to fix, further restrict, or rethink the crate entirel
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(rustdoc::private_intra_doc_links)]
+#![allow(rustdoc::invalid_html_tags)]
 #![deny(missing_docs)]
 #![allow(clippy::needless_return)]
 #![allow(clippy::needless_lifetimes)]
@@ -470,7 +493,7 @@ pub(crate) trait Error: Debug + Display {
     }
 }
 
-/// Module defining the version(s) of [Prison<T>] and [JailCell<T>] suitable for use only from within a single-thread
+/// Module defining the version(s) of [Prison<T>](crate::single_threaded::Prison) and [JailCell<T>](crate::single_threaded::JailCell) suitable for use only from within a single-thread
 pub mod single_threaded;
 
 //ENUM AccessError
