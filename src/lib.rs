@@ -10,6 +10,7 @@ those found on a [Vec], how to access the data contained in it, and how it achie
 
 ### Project Links
 grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)  
+grit-data-prison on [Lib.rs](https://lib.rs/crates/grit-data-prison)  
 grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)  
 grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_prison/)  
 
