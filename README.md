@@ -370,6 +370,7 @@ Possible future additions may include:
 - [x] Single-thread safe [Prison<T>](crate::single_threaded::Prison)
 - [x] `Guard` api for a more Rust-idiomatic way to access values
 - [x] Switch to reference counting with same memory footprint
+- [ ] Const Generic bounds to customize the size of internal utility values
 - [ ] More public methods (as long as they make sense and don't bloat the API)
 - [ ] Multi-thread safe `AtomicPrison<T>`
 - [x] ? Single standalone value version, [JailCell<T>](crate::single_threaded::JailCell)
@@ -397,6 +398,7 @@ The best way to do this would be to follow these steps:
     - solve the problem in your branch and create a pull request into the `dev` branch with a message explaining everything
     - create a pull request with only the test proving the failure point with a message describing why it is a failure and that *this pull request does not solve the problem*
 # Changelog
+ - Version 0.3.1: Non-Breaking feature: `peek_ref()` and `peek_ref_idx()`, UNSAFE methods that allow the caller to get a reference to a value while bypassing reference counting and other safety checks
  - Version 0.3.0: MAJOR BREAKING change to API:
      - Switch to reference counting instead of [bool] locks: the memory footprint is the same (in most cases) and the safety logic is almost the same. Reference counting gives more flexibility and finer grained control with no real penalty compared to using a [bool]
      - `escort()` methods renamed to `guard()` methods
