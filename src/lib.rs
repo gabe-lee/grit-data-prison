@@ -1,5 +1,5 @@
-//REGION MAIN DOCUMENTATION
-/*! ![Image](https://img.shields.io/badge/coverage-90.67%25-green) ![Image](https://img.shields.io/badge/unit%20tests-34%20pass%20%7C%200%20fail%20%7C%201%20ignore-brightgreen) ![Image](https://img.shields.io/badge/doc%20tests-100%20pass%20%7C%200%20fail-brightgreen) ![Image](https://img.shields.io/badge/dependencies-none-brightgreen) ![Image](https://img.shields.io/badge/license-BSD--3--Clause-informational)
+//====== MAIN DOCS ======
+/*! ![Image](https://img.shields.io/badge/coverage-82.51%25-yellowgreen) ![Image](https://img.shields.io/badge/unit%20tests-37%20pass%20%7C%200%20fail%20%7C%201%20ignore-brightgreen) ![Image](https://img.shields.io/badge/doc%20tests-100%20pass%20%7C%200%20fail-brightgreen) ![Image](https://img.shields.io/badge/dependencies-none-brightgreen) ![Image](https://img.shields.io/badge/license-BSD--3--Clause-informational)
 This crate provides the struct [Prison<T>](crate::single_threaded::Prison), a generational arena data structure
 that allows simultaneous interior mutability to each and every element by providing `.visit()` methods
 that take closures that are passed mutable references to the values, or by using the `.guard()` methods to
@@ -9,10 +9,10 @@ This documentation describes the usage of [Prison<T>](crate::single_threaded::Pr
 those found on a [Vec], how to access the data contained in it, and how it achieves memory safety.
 
 ### Project Links
-grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)
-grit-data-prison on [Lib.rs](https://lib.rs/crates/grit-data-prison)
-grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)
-grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_prison/)
+grit-data-prison on [Crates.io](https://crates.io/crates/grit-data-prison)  
+grit-data-prison on [Lib.rs](https://lib.rs/crates/grit-data-prison)  
+grit-data-prison on [Github](https://github.com/gabe-lee/grit-data-prison)  
+grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.4.0/grit_data_prison/)  
 
 ### Quick Look
 - Uses an underlying [Vec<T>] to store items of the same type
@@ -25,7 +25,7 @@ grit-data-prison on [Docs.rs](https://docs.rs/grit-data-prison/0.3.0/grit_data_p
 
 ### NOTE
 This package is still UNSTABLE and may go through several iterations before I consider it good enough to set in stone, see [changelog](#changelog)
-- Version 0.3.x is a breaking api change for 0.2.x and older
+- Version 0.4.x is a (very minor) breaking api change for 0.3.x and older, but it shouldn't affect most users and is an easy update
 - ALSO: Version 0.2.x and older were discovered to have a soft memory leak when using `insert_at()` and `overwrite()`, see [changelog](#changelog) for details
 # Motivation
 
@@ -445,6 +445,8 @@ The best way to do this would be to follow these steps:
     - solve the problem in your branch and create a pull request into the `dev` branch with a message explaining everything
     - create a pull request with only the test proving the failure point with a message describing why it is a failure and that *this pull request does not solve the problem*
 # Changelog
+ - Version 0.4.0: BREAKING change: change `peek_ref()` and `peek_ref_idx()` to return [Result<T, AccessError>] instead of [Option<T>], and add `peek_ref()` to [JailCell](crate::single_threaded::JailCell)
+     - I know it's a very small difference, but breaking is breaking, sorry! It should have been a `Result` from the beginning to match the existing API and allow easy error propogation inside functions that expect `AccessError`s without a bunch of boilerplate testing for `Some`/`None` just to return a `AccessError::ValueDeleted` anyway
  - Version 0.3.1: Non-Breaking feature: `peek_ref()` and `peek_ref_idx()`, UNSAFE methods that allow the caller to get a reference to a value while bypassing reference counting and other safety checks
  - Version 0.3.0: MAJOR BREAKING change to API:
      - Switch to reference counting instead of [bool] locks: the memory footprint is the same (in most cases) and the safety logic is almost the same. Reference counting gives more flexibility and finer grained control with no real penalty compared to using a [bool]
@@ -467,7 +469,7 @@ The best way to do this would be to follow these steps:
 #![allow(clippy::needless_return)]
 #![allow(clippy::needless_lifetimes)]
 
-//REGION Crate Imports
+//====== Crate Imports ======
 #[cfg(not(feature = "no_std"))]
 pub(crate) use std::{
     borrow::{Borrow, BorrowMut},
@@ -525,7 +527,7 @@ pub mod single_threaded;
 /// [std::fmt::Debug] traits, with the `Display` version giving a short description of the problem,
 /// and the `Debug` version giving a more in-depth explaination of exactly why an error had to be
 /// returned
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq)] //COV_IGNORE
 pub enum AccessError {
     /// Indicates that an operation attempted to access an index beyond the range of the [Prison<T>](crate::single_threaded::Prison),
     /// along with the offending index
@@ -642,7 +644,7 @@ impl Error for AccessError {}
 ///
 /// This struct is designed to be passed to some other struct or function that needs to be able to
 /// reference the data stored at the cell number.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)] //COV_IGNORE
 pub struct CellKey {
     idx: usize,
     gen: usize,
@@ -674,7 +676,8 @@ impl CellKey {
     }
 }
 
-//REGION Crate Utilities
+//====== Crate Utilities ======
+//FN extract_true_start_end
 #[doc(hidden)]
 fn extract_true_start_end<B>(range: B, max_len: usize) -> (usize, usize)
 where
@@ -693,6 +696,7 @@ where
     return (start, end);
 }
 
+//MACRO internal!
 macro_rules! internal {
     ($p:tt) => {
         unsafe { &mut *$p.internal.get() }
@@ -700,6 +704,7 @@ macro_rules! internal {
 }
 pub(crate) use internal;
 
+//MACRO major_malfunction!
 macro_rules! major_malfunction {
     ($MSG:literal, $($VAR:expr),*) => {
         if cfg!(feature = "major_malf_is_err") {
